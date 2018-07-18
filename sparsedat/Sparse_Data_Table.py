@@ -1,11 +1,11 @@
 import struct
 import zlib
+import pickle
 import numpy
+import io
 
 from .Data_Type import Data_Type
 from .Metadata_Type import Metadata_Type
-
-import io
 
 
 CURRENT_VERSION = 1
@@ -333,6 +333,14 @@ class Sparse_Data_Table:
     def num_entries(self):
         return self._num_entries
 
+    @property
+    def metadata(self):
+        return self._metadata[Metadata_Type.USER_METADATA]
+
+    @metadata.setter
+    def metadata(self, user_metadata):
+        self._metadata[Metadata_Type.USER_METADATA] = user_metadata
+
     def _calculate_formats(self):
 
         self._num_bytes_row_index = self.get_num_bytes(
@@ -409,7 +417,7 @@ class Sparse_Data_Table:
                 struct.pack(self._pack_format_column_byte, column_start_byte))
 
         data_buffer.write(struct.pack(self._pack_format_data,
-                                    self._default_value))
+                                      self._default_value))
 
         for row_index, row_start_index in enumerate(self._row_start_indices):
 
@@ -476,7 +484,6 @@ class Sparse_Data_Table:
                 for name in metadata:
 
                     name_bytes = name.encode("utf-8")
-
                     name_length = len(name_bytes)
 
                     metadata_content_bytes.extend(
@@ -484,6 +491,17 @@ class Sparse_Data_Table:
                     metadata_content_bytes.extend(name_bytes)
 
                     byte_index += 4 + name_length
+            elif metadata_type == Metadata_Type.USER_METADATA:
+
+                user_metadata_bytes = pickle.dumps(metadata)
+                user_metadata_length = len(user_metadata_bytes)
+
+                metadata_content_bytes.extend(user_metadata_bytes)
+
+                byte_index += 4 + user_metadata_length
+            else:
+                raise NotImplementedError("Metadata type %i not implemented." %
+                                          metadata_type.value)
 
         metadata_bytes += metadata_content_bytes
 
@@ -551,6 +569,17 @@ class Sparse_Data_Table:
                     metadata.append(name)
 
                 self._metadata[metadata_type] = metadata
+            elif metadata_type == Metadata_Type.USER_METADATA:
+
+                end_byte = byte_index + metadata_length
+
+                metadata = pickle.loads(
+                    metadata_content_bytes[byte_index:end_byte])
+
+                self._metadata[metadata_type] = metadata
+            else:
+                raise NotImplementedError("Metadata type %i not implemented." %
+                                          metadata_type.value)
 
     def load(self, file_path=None):
 
@@ -628,7 +657,8 @@ class Sparse_Data_Table:
         data_index = 0
 
         unpack_data = struct.Struct(self._pack_format_data).unpack
-        unpack_column_index = struct.Struct(self._pack_format_column_index).unpack
+        unpack_column_index = struct.Struct(
+            self._pack_format_column_index).unpack
         unpack_row_index = struct.Struct(self._pack_format_row_index).unpack
 
         for row_index, row_start_index in enumerate(self._row_start_indices):
