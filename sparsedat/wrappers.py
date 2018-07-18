@@ -1,3 +1,6 @@
+import numpy
+from scipy import sparse
+
 from .Sparse_Data_Table import Sparse_Data_Table
 
 
@@ -43,7 +46,65 @@ def load_mtx(row_names_file_path, column_names_file_path, matrix_file_path):
 
     sdt.from_row_column_values(row_column_values, num_rows, num_columns)
 
-    sdt.set_column_names(column_names)
-    sdt.set_row_names(row_names)
+    sdt.column_names = column_names
+    sdt.row_names = row_names
 
     return sdt
+
+
+def to_numpy(sdt):
+
+    numpy_array = numpy.full(sdt.shape, fill_value=sdt.default_value)
+
+    for row_index, row_start_index in enumerate(sdt._row_start_indices):
+
+        num_row_entries = sdt._row_lengths[row_index]
+
+        data_indices = range(row_start_index,
+                             row_start_index + num_row_entries)
+
+        for data_index in data_indices:
+            column_index = sdt._row_column_indices[data_index]
+            numpy_array[row_index, column_index] = sdt._row_data[data_index]
+
+    return numpy_array
+
+
+def to_coo(sdt):
+
+    row_indices = [
+        [row_index for _ in range(row_length)]
+        for row_index, row_length in enumerate(sdt._row_lengths)]
+
+    row_indices = [y for x in row_indices for y in x]
+
+    scipy_array = sparse.coo_matrix(
+        (sdt._row_data, (row_indices, sdt._row_column_indices)),
+        shape=sdt.shape)
+
+    return scipy_array
+
+
+def to_csr(sdt):
+
+    row_start_indices = sdt._row_start_indices
+    row_start_indices = numpy.append(row_start_indices, sdt.num_entries - 1)
+
+    scipy_array = sparse.csr_matrix(
+        (sdt._row_data, sdt._row_column_indices, row_start_indices),
+        shape=sdt.shape)
+
+    return scipy_array
+
+
+def to_csc(sdt):
+
+    column_start_indices = sdt._column_start_indices
+    column_start_indices = numpy.append(column_start_indices, sdt.num_entries - 1)
+
+    scipy_array = sparse.csc_matrix(
+        (sdt._column_data, sdt._column_row_indices, column_start_indices),
+        shape=sdt.shape)
+
+    return scipy_array
+
