@@ -30,6 +30,8 @@ sdt._column_lengths = [2, 1, 0, 1, 1]
 sdt._column_row_indices = [0, 1, 1, 0, 1]
 sdt._column_data = [1, 5, 7, 1, 2]
 sdt._num_entries = 5
+sdt._is_data_loaded = True
+sdt._is_metadata_loaded = True
 
 index_recovered_value = sdt[TARGET_INDEX]
 
@@ -41,6 +43,8 @@ sdt.save("test.sdt")
 loaded_sdt = sparsedat.Sparse_Data_Table("test.sdt")
 
 reloaded_value = loaded_sdt[TARGET_INDEX]
+
+print(loaded_sdt._row_start_indices)
 
 if reloaded_value != EXPECTED_VALUE:
     raise ValueError("Value after writing/reading to file not as expected")
