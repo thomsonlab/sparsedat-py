@@ -1090,20 +1090,12 @@ class Sparse_Data_Table:
             self._row_start_indices,
             self._num_bytes_column_index + self._data_size)
 
-        self._row_lengths = numpy.zeros(
-            (self._num_rows,), dtype=self._pack_format_row_byte)
+        row_start_indices_plus_one = \
+            numpy.append(self._row_start_indices,
+                         self._num_bytes_row_byte * self._num_rows)
 
-        for row_index, row_start_index in enumerate(
-                self._row_start_indices):
-
-            if row_index == self._num_rows - 1:
-                row_end_index = self._num_entries
-            else:
-                row_end_index = self._row_start_indices[row_index + 1]
-
-            num_row_entries = row_end_index - row_start_index
-
-            self._row_lengths[row_index] = num_row_entries
+        self._row_lengths = numpy.subtract(row_start_indices_plus_one[1:],
+                                           self._row_start_indices)
 
         column_start_indices_bytes = \
             self._data_buffer.read(
