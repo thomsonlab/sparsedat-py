@@ -39,7 +39,6 @@ if index_recovered_value != EXPECTED_VALUE:
 sdt.save("test.sdt")
 
 loaded_sdt = sparsedat.Sparse_Data_Table("test.sdt")
-loaded_sdt.load()
 
 reloaded_value = loaded_sdt[TARGET_INDEX]
 

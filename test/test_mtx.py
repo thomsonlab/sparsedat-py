@@ -1,19 +1,25 @@
 import sparsedat
+import os
 
-EXPECTED_VALUE = 3
+test_data_directory = "data"
 
-sdt = sparsedat.wrappers.load_mtx("test/genes.tsv", "test/barcodes.tsv", "test/matrix.mtx")
+EXPECTED_VALUE = 2
 
-original_value = sdt[20306, 117]
+sdt = sparsedat.wrappers.load_mtx(
+    os.path.join(test_data_directory, "genes.tsv"),
+    os.path.join(test_data_directory, "barcodes.tsv"),
+    os.path.join(test_data_directory, "matrix.mtx"))
+
+original_value = sdt[16596, 123]
 if original_value != EXPECTED_VALUE:
     raise ValueError("Value from importing mtx is not correct")
 
-sdt.save("from_mtx.sdt")
+sdt.save(os.path.join(test_data_directory, "from_mtx.sdt"))
 
-sdt2 = sparsedat.Sparse_Data_Table("from_mtx.sdt")
-sdt2.load()
+sdt2 = sparsedat.Sparse_Data_Table(
+    os.path.join(test_data_directory, "from_mtx.sdt"))
 
-reloaded_value = sdt2[20306, 117]
+reloaded_value = sdt2[16596, 123]
 
 if reloaded_value != EXPECTED_VALUE:
     raise ValueError("Value from writing/reading after mtx is not correct")
