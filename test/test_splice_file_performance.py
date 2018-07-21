@@ -72,10 +72,10 @@ if not os.path.exists(scipy_coo_file_path) or \
 # Slicing sequential full rows
 
 NUM_REPETITIONS = 1
-NUM_ROWS_TO_SLICE = 10
-START_ROW = 1000
+ROWS_TO_SLICE = slice(70, 73, None)
+COLUMNS_TO_SLICE = slice(50, 55, None)
 
-end_row = START_ROW + NUM_ROWS_TO_SLICE
+num_rows = ROWS_TO_SLICE.stop - ROWS_TO_SLICE.start
 
 
 def load_indices():
@@ -86,77 +86,67 @@ def load_indices():
     del sdt
 
 
-# duration = timeit.timeit(load_indices, number=NUM_REPETITIONS) / NUM_REPETITIONS
-# print("SDT indices loaded from file: %.4fs" % duration)
+duration = timeit.timeit(load_indices, number=NUM_REPETITIONS) / NUM_REPETITIONS
+print("SDT indices loaded from file: %.4fs" % duration)
 
 
 def splice_MTX():
 
     mtx_matrix = sio.mmread(mtx_file_path).tocsc()
-
-    for _ in range(NUM_ROWS_TO_SLICE):
-        row = numpy.random.randint(0, mtx_matrix.shape[0])
-        sliced = mtx_matrix[row, 100]
+    sliced = mtx_matrix[ROWS_TO_SLICE, COLUMNS_TO_SLICE].todense()
 
 
-duration = timeit.timeit(splice_MTX, number=NUM_REPETITIONS) / NUM_REPETITIONS
-print("Scipy loaded mtx and sliced %i row(s) from file: %.4fs" %
-      (NUM_ROWS_TO_SLICE, duration))
+# duration = timeit.timeit(splice_MTX, number=NUM_REPETITIONS) / NUM_REPETITIONS
+# print("Scipy loaded mtx and sliced %i row(s) from file: %.4fs" %
+#       (num_rows, duration))
 
 
 def splice_COO():
     scipy_coo_file = open(scipy_coo_file_path, "rb")
     scipy_coo_matrix = sparse.load_npz(scipy_coo_file)
     scipy_coo_matrix = scipy_coo_matrix.tocsr()
-    for _ in range(NUM_ROWS_TO_SLICE):
-        row = numpy.random.randint(0, scipy_coo_matrix.shape[0])
-        sliced = scipy_coo_matrix[row, 100]
+    sliced = scipy_coo_matrix[ROWS_TO_SLICE, COLUMNS_TO_SLICE].todense()
     scipy_coo_file.close()
 
 
-duration = timeit.timeit(splice_COO, number=NUM_REPETITIONS) / NUM_REPETITIONS
-print("Scipy COO Loaded and sliced %i row(s) from file: %.4fs" %
-      (NUM_ROWS_TO_SLICE, duration))
-
-
-def splice_CSR():
-    scipy_csr_file = open(scipy_csr_file_path, "rb")
-    scipy_csr_matrix = sparse.load_npz(scipy_csr_file)
-    for _ in range(NUM_ROWS_TO_SLICE):
-        row = numpy.random.randint(0, scipy_csr_matrix.shape[0])
-        sliced = scipy_csr_matrix[row, 100]
-    scipy_csr_file.close()
-
-
-duration = timeit.timeit(splice_CSR, number=NUM_REPETITIONS) / NUM_REPETITIONS
-print("Scipy CSR Loaded and sliced %i row(s) from file: %.4fs" %
-      (NUM_ROWS_TO_SLICE, duration))
+# duration = timeit.timeit(splice_COO, number=NUM_REPETITIONS) / NUM_REPETITIONS
+# print("Scipy COO Loaded and sliced %i row(s) from file: %.4fs" %
+#       (num_rows, duration))
 
 
 def splice_CSC():
     scipy_csc_file = open(scipy_csr_file_path, "rb")
     scipy_csc_matrix = sparse.load_npz(scipy_csc_file)
+    sliced = scipy_csc_matrix[ROWS_TO_SLICE, COLUMNS_TO_SLICE].todense()
+    print(sliced)
     scipy_csc_file.close()
-
-    for _ in range(NUM_ROWS_TO_SLICE):
-        row = numpy.random.randint(0, scipy_csc_matrix.shape[0])
-        sliced = scipy_csc_matrix[row, 100]
 
 duration = timeit.timeit(splice_CSC, number=NUM_REPETITIONS) / NUM_REPETITIONS
 print("Scipy CSC Loaded and sliced %i row(s) from file: %.4fs" %
-      (NUM_ROWS_TO_SLICE, duration))
+      (num_rows, duration))
 
 def splice_SDT():
     sdt = sparsedat.Sparse_Data_Table(
-        os.path.join(test_data_directory, "big.sdt"))
-
-    for _ in range(NUM_ROWS_TO_SLICE):
-        row = numpy.random.randint(0, sdt.shape[0])
-        sliced = sdt[row, 100]
+        os.path.join(test_data_directory, "big.sdt"),
+        load_on_demand=True)
+    sliced = sdt[ROWS_TO_SLICE, COLUMNS_TO_SLICE]
+    print(sliced)
 
     del sdt
 
-
 duration = timeit.timeit(splice_SDT, number=NUM_REPETITIONS) / NUM_REPETITIONS
 print("SDT loaded and sliced %i row(s) from file: %.4fs" %
-      (NUM_ROWS_TO_SLICE, duration))
+      (num_rows, duration))
+
+
+def splice_CSR():
+    scipy_csr_file = open(scipy_csr_file_path, "rb")
+    scipy_csr_matrix = sparse.load_npz(scipy_csr_file)
+    sliced = scipy_csr_matrix[ROWS_TO_SLICE, COLUMNS_TO_SLICE].todense()
+    print(sliced)
+    scipy_csr_file.close()
+
+
+duration = timeit.timeit(splice_CSR, number=NUM_REPETITIONS) / NUM_REPETITIONS
+print("Scipy CSR Loaded and sliced %i row(s) from file: %.4fs" %
+      (num_rows, duration))

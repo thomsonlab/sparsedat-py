@@ -1,6 +1,6 @@
 import sparsedat
 
-sdt = sparsedat.Sparse_Data_Table("test.sdt")
+sdt = sparsedat.Sparse_Data_Table("data/test.sdt")
 
 print(sdt.row_names)
 print(sdt.column_names)
@@ -12,9 +12,9 @@ my_metadata = {
 
 sdt.metadata = my_metadata
 
-sdt.save("test_metadata.sdt")
+sdt.save("data/test_metadata.sdt")
 
-sdt_loaded = sparsedat.Sparse_Data_Table("test_metadata.sdt")
+sdt_loaded = sparsedat.Sparse_Data_Table("data/test_metadata.sdt")
 
 print(sdt_loaded.metadata)
 

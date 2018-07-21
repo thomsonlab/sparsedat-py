@@ -4,6 +4,7 @@ import pickle
 import numpy
 import io
 import time
+import sys
 
 from .Data_Type import Data_Type
 from .Metadata_Type import Metadata_Type
@@ -106,6 +107,8 @@ class Sparse_Data_Table:
         self._num_bytes_column_index = None
         self._num_bytes_row_byte = None
         self._num_bytes_column_byte = None
+        self._num_bytes_row_entry = None
+        self._num_bytes_column_entry = None
         self._max_row_byte = None
         self._max_column_byte = None
         self._pack_format_row_byte = None
@@ -116,11 +119,12 @@ class Sparse_Data_Table:
 
         # Data relevant for real time file I/O
         self._metadata_size = None
-        self._is_metadata_loaded = False
+        self._is_metadata_on_buffer = False
         self._row_data_start_byte = None
         self._column_data_start_byte = None
-        self._is_data_loaded = False
+        self._is_data_on_buffer = False
         self._load_on_demand = load_on_demand
+        self._scipy_sparse_matrix = None
 
         self._unpack_data = None
         self._unpack_column_index = None
@@ -128,6 +132,8 @@ class Sparse_Data_Table:
 
         if file_path is not None:
             self.set_file_path(file_path)
+        if not self._load_on_demand:
+            self.load_all_data()
 
     def __del__(self):
 
@@ -140,405 +146,262 @@ class Sparse_Data_Table:
     def __getitem__(self, index):
 
         if isinstance(index, int):
-            raise NotImplementedError(
-                "Haven't implemented just row slicing - use a full index spec")
+            row_index = index
+            column_index = slice(None, None, None)
+        else:
+            row_index, column_index = index
 
-        row_index, column_index = index
+        if isinstance(row_index, slice):
+            if row_index.step is not None:
+                raise NotImplementedError(
+                    "Haven't implemented step slicing")
 
-        if isinstance(row_index, slice) or isinstance(column_index, slice):
-
-            if isinstance(row_index, slice):
-                if row_index.step is not None:
-                    raise NotImplementedError(
-                        "Haven't implemented step slicing")
-
-                if row_index.start is None:
-                    start_row = 0
-                else:
-                    start_row = row_index.start
-                if row_index.stop is None:
-                    stop_row = self._num_rows
-                else:
-                    stop_row = row_index.stop
+            if row_index.start is None:
+                start_row = 0
             else:
-                start_row = row_index
-                stop_row = row_index + 1
-
-            if isinstance(column_index, slice):
-                if column_index.step is not None:
-                    raise NotImplementedError(
-                        "Haven't implemented step slicing")
-
-                if column_index.start is None:
-                    start_column = 0
-                else:
-                    start_column = column_index.start
-                if column_index.stop is None:
-                    stop_column = self._num_columns
-                else:
-                    stop_column = column_index.stop
+                start_row = row_index.start
+            if row_index.stop is None:
+                stop_row = self._num_rows
             else:
-                start_column = column_index
-                stop_column = column_index + 1
+                stop_row = row_index.stop
+        else:
+            start_row = row_index
+            stop_row = row_index + 1
 
-            num_rows = stop_row - start_row
-            num_columns = stop_column - start_column
+        if isinstance(column_index, slice):
+            if column_index.step is not None:
+                raise NotImplementedError(
+                    "Haven't implemented step slicing")
 
-            subarray = numpy.full(
+            if column_index.start is None:
+                start_column = 0
+            else:
+                start_column = column_index.start
+            if column_index.stop is None:
+                stop_column = self._num_columns
+            else:
+                stop_column = column_index.stop
+        else:
+            start_column = column_index
+            stop_column = column_index + 1
+
+        num_rows = stop_row - start_row
+        num_columns = stop_column - start_column
+
+        num_row_entries = self._row_lengths[start_row:stop_row].sum()
+        num_column_entries = self._column_lengths[start_row:stop_row].sum()
+
+        if self._default_value == 0:
+            sliced_array = numpy.zeros(
                 (num_rows, num_columns),
-                fill_value=self._default_value)
+                dtype=self._pack_format_data
+            )
+        else:
+            sliced_array = numpy.full(
+                (num_rows, num_columns),
+                fill_value=self._default_value,
+                dtype=self._pack_format_data)
 
-            subarray_row_index = 0
-            subarray_column_index = 0
+        # If we have less rows, then we should slice along rows first
+        if num_row_entries <= num_column_entries:
 
-            # If we have less rows, then we should slice along rows first
-            if num_rows <= num_columns:
+            target_column_indices = numpy.arange(start_column, stop_column)
 
-                # byte_calculation_time = 0
-                # unpack_time = 0
-                # array_write_time = 0
-                # seek_time = 0
-                # indexing_time = 0
-                # array_copy_time = 0
+            # Loop through each row we want to grab
 
-                bytes_per_entry = self._num_bytes_column_index + self._data_size
+            for target_row_index in range(start_row, stop_row):
 
-                for target_row_index in range(start_row, stop_row):
+                num_row_entries = self._row_lengths[target_row_index]
 
-                    # start_time = time.time()
-                    num_row_entries = self._row_lengths[target_row_index]
+                # If this is an empty row, skip it
+                if num_row_entries == 0:
+                    continue
 
-                    if num_row_entries == 0:
-                        continue
+                # This is where this row's data entries start
+                row_entry_start_index = \
+                    self._row_start_indices[target_row_index]
 
-                    row_entry_start_index = self._row_start_indices[target_row_index]
-                    # indexing_time += time.time() - start_time
+                # And this is where it ends
+                row_entry_end_index = row_entry_start_index + \
+                    num_row_entries
 
-                    row_entry_end_index = row_entry_start_index + num_row_entries
+                # If the data is on a buffer, we look at the buffer
+                if self._is_data_on_buffer:
 
                     byte_index = self._row_data_start_byte + \
-                                 row_entry_start_index * bytes_per_entry
+                        row_entry_start_index * self._num_bytes_row_entry
 
                     self._data_buffer.seek(byte_index)
 
-                    # entry_column_index_bytes = bytearray()
-                    # data_value_bytes = bytearray()
-                    #
-                    # for row_entry_index in range(row_entry_start_index,
-                    #                              row_entry_end_index):
-                    #
-                    #     # start_time = time.time()
-                    #
-                    #     # byte_calculation_time += time.time() - start_time
-                    #
-                    #     # start_time = time.time()
-                    #     # seek_time += time.time() - start_time
-                    #     #
-                    #     # start_time = time.time()
-                    #
-                    #     entry_column_index_bytes += self._data_buffer.read(
-                    #             self._num_bytes_column_index)
-                    #
-                    #     # entry_column_index = numpy.ndarray(
-                    #     #     (1,),
-                    #     #     self._pack_format_column_index,
-                    #     #     some_bytes
-                    #     # )[0]
-                    #
-                    #     # entry_column_index = self._unpack_column_index(
-                    #     #     self._data_buffer.read(
-                    #     #         self._num_bytes_column_index))[0]
-                    #     # unpack_time += time.time() - start_time
-                    #
-                    #     # if entry_column_index < start_column:
-                    #     #     row_entry_index += 1
-                    #     #     continue
-                    #     # if entry_column_index >= stop_column:
-                    #     #     break
-                    #
-                    #     # start_time = time.time()
-                    #     data_value_bytes += self._data_buffer.read(
-                    #         self._data_size)
-                    #     # unpack_time += time.time() - start_time
-                    #
-                    #     # start_time = time.time()
-                    #     # subarray[target_row_index - start_row,
-                    #     #     entry_column_index - start_column] = data_value
-                    #     # array_write_time += time.time() - start_time
+                    column_indices_read_length = self._num_bytes_row_entry *\
+                        num_row_entries
 
-                    self._data_buffer.seek(byte_index)
-
-                    # start_time = time.time()
                     column_indices = numpy.ndarray(
                         (num_row_entries,),
                         self._pack_format_column_index,
-                        self._data_buffer.read((self._num_bytes_column_index + self._data_size) * num_row_entries),
-                        strides=self._data_size
+                        self._data_buffer.read(column_indices_read_length),
+                        strides=self._num_bytes_row_entry
                     )
 
-                    self._data_buffer.seek(byte_index + self._num_bytes_column_index)
+                    self._data_buffer.seek(byte_index +
+                                           self._num_bytes_column_index)
 
-                    read_length = (self._num_bytes_column_index + self._data_size) * num_row_entries - self._num_bytes_column_index
+                    read_length = self._num_bytes_row_entry * \
+                        num_row_entries - self._num_bytes_column_index
 
-                    row_data_array = numpy.ndarray(
+                    row_data = numpy.ndarray(
                         (num_row_entries,),
                         self._pack_format_data,
                         self._data_buffer.read(read_length),
-                        strides=self._num_bytes_column_index
+                        strides=self._num_bytes_row_entry
                     )
 
-                    # array_copy_time += time.time() - start_time
+                # If the data is not on a buffer, we can just grab it directly
+                # from our stored arrays
+                else:
+                    column_indices = self._row_column_indices[
+                        row_entry_start_index:row_entry_end_index]
+                    row_data = self._row_data[
+                        row_entry_start_index:row_entry_end_index]
 
-                    # start_time = time.time()
-                    target_row_index = target_row_index - start_row
+                first_found_index = numpy.searchsorted(
+                    column_indices, target_column_indices[0], side="left")
 
-                    start_row_entry_index = 0
-                    end_row_entry_index = num_row_entries - 1
+                last_found_index = numpy.searchsorted(
+                    column_indices, target_column_indices[-1], side="right")
 
-                    while column_indices[start_row_entry_index] < start_column:
-                        start_row_entry_index += 1
+                # This means the right-most column of this row is already
+                # before the bounds of the desired slice; we can stop
+                if first_found_index >= num_row_entries:
+                    continue
 
-                    while column_indices[end_row_entry_index] >= stop_column:
-                        end_row_entry_index -= 1
+                if last_found_index == 0:
+                    if column_indices[0] != target_column_indices[-1]:
+                        continue
 
-                    subarray_column_indices = numpy.subtract(column_indices, start_column)
+                # This means the left-most column of this row is at or beyond
+                # the left bound of the slice. If so, this is where we start
+                if first_found_index == 0:
+                    # If the value is the same, it means the left-most column
+                    # of this row is exactly the start of the slice bound
+                    if column_indices[0] != target_column_indices[0]:
+                        first_found_index = 1
 
-                    for row_entry_index in range(start_row_entry_index, end_row_entry_index):
+                if last_found_index == num_row_entries:
+                    if column_indices[last_found_index - 1] != \
+                            target_column_indices[-1]:
+                        last_found_index = num_row_entries - 1
 
-                        subarray[target_row_index, subarray_column_indices[row_entry_index]] = \
-                            row_data_array[row_entry_index]
+                if first_found_index >= last_found_index:
+                    continue
 
-                # print("Byte calculation time: %.4fs" % byte_calculation_time)
-                # print("Unpack time: %.4fs" % unpack_time)
-                # print("Array write time: %.4fs" % array_write_time)
-                # print("Seek time: %.4fs" % seek_time)
-                # print("Indexing time: %.4fs" % indexing_time)
-                # print("Array copy time: %.4fs" % array_copy_time)
-            else:
-                for target_column_index in range(start_column, stop_column):
-                    subarray[:, subarray_column_index] = \
-                        self.get_column(target_column_index, row_index)
-                    subarray_column_index += 1
+                found_indices = numpy.arange(first_found_index, last_found_index)
 
-            return subarray
-
-        num_row_entries = self._row_lengths[row_index]
-        num_column_entries = self._column_lengths[column_index]
-
-        if num_row_entries < num_column_entries:
-
-            row_start_index = self._row_start_indices[row_index]
-            row_end_index = row_start_index + num_row_entries
-
-            if self._load_on_demand and not self._is_data_loaded:
-
-                row_entry_index = row_start_index
-
-                while row_entry_index <= row_end_index:
-
-                    byte_index = self._row_data_start_byte + \
-                                     row_entry_index * (
-                                         self._num_bytes_column_index +
-                                         self._data_size)
-
-                    self._data_buffer.seek(byte_index)
-                    entry_column_index = self._unpack_column_index(
-                        self._data_buffer.read(self._num_bytes_column_index))[0]
-
-                    if column_index == entry_column_index:
-                        data_value = self._unpack_data(
-                            self._data_buffer.read(self._data_size))[0]
-                        return data_value
-
-                    row_entry_index += 1
-
-                return self._default_value
-            else:
-                try:
-                    column_data_index = \
-                        self._row_column_indices[
-                            row_start_index:row_end_index]\
-                        .index(column_index)
-                    return self._row_data[row_start_index + column_data_index]
-                except ValueError:
-                    return self._default_value
+                relative_column_indices = \
+                    column_indices[found_indices] - start_column
+                relative_row_index = target_row_index - start_row
+                sliced_array[relative_row_index, relative_column_indices] = \
+                    row_data[found_indices]
         else:
-            column_start_index = self._column_start_indices[column_index]
-            column_end_index = column_start_index + num_column_entries
 
-            if self._load_on_demand and not self._is_data_loaded:
+            target_row_indices = numpy.arange(start_row, stop_row)
 
-                column_index = column_start_index
+            # Loop through each column we want to grab
 
-                while column_index <= column_end_index:
+            for target_column_index in range(start_column, stop_column):
+
+                num_column_entries = self._column_lengths[target_column_index]
+
+                # If this is an empty column, skip it
+                if num_column_entries == 0:
+                    continue
+
+                # This is where this column's data entries start
+                column_entry_start_index = \
+                    self._column_start_indices[target_column_index]
+
+                # And this is where it ends
+                column_entry_end_index = column_entry_start_index + \
+                    num_column_entries
+
+                # If the data is on a buffer, we look at the buffer
+                if self._is_data_on_buffer:
 
                     byte_index = self._column_data_start_byte + \
-                                    column_index * (
-                                         self._num_bytes_row_index +
-                                         self._data_size)
+                        column_entry_start_index * self._num_bytes_column_entry
 
                     self._data_buffer.seek(byte_index)
-                    entry_row_index = self._unpack_row_index(
-                        self._data_buffer.read(self._num_bytes_row_index))[0]
 
-                    if row_index == entry_row_index:
-                        data_value = self._unpack_data(
-                            self._data_buffer.read(self._data_size))[0]
-                        return data_value
+                    row_indices_read_length = self._num_bytes_column_entry *\
+                        num_column_entries
 
-                    column_index += 1
+                    row_indices = numpy.ndarray(
+                        (num_column_entries,),
+                        self._pack_format_row_index,
+                        self._data_buffer.read(row_indices_read_length),
+                        strides=self._num_bytes_column_entry
+                    )
 
-                return self._default_value
-            else:
-                try:
-                    row_data_index = \
-                        self._column_row_indices[
-                            column_start_index:column_end_index]\
-                        .index(row_index)
-                    return self._column_data[
-                        column_start_index + row_data_index]
-                except ValueError:
-                    return self._default_value
+                    self._data_buffer.seek(byte_index +
+                                           self._num_bytes_row_index)
 
-    def get_row(self, row_index, column_slice=None):
+                    read_length = self._num_bytes_column_entry * \
+                        num_column_entries - self._num_bytes_row_index
 
-        if column_slice is None:
-            column_start_index = 0
-            column_stop_index = self._num_columns
-        else:
-            if column_slice.start is None:
-                column_start_index = 0
-            else:
-                column_start_index = column_slice.start
-            if column_slice.stop is None:
-                column_stop_index = self._num_columns
-            else:
-                column_stop_index = column_slice.stop
+                    column_data = numpy.ndarray(
+                        (num_column_entries,),
+                        self._pack_format_data,
+                        self._data_buffer.read(read_length),
+                        strides=self._num_bytes_column_entry
+                    )
+                # If the data is not on a buffer, we can just grab it directly
+                # from our stored arrays
+                else:
+                    row_indices = self._column_row_indices[
+                        column_entry_start_index:column_entry_end_index]
+                    column_data = self._column_data[
+                        column_entry_start_index:column_entry_end_index]
 
-        num_columns = column_stop_index - column_start_index
+                first_found_index = numpy.searchsorted(
+                    row_indices, target_row_indices[0], side="left")
 
-        row = numpy.full((num_columns,), fill_value=self._default_value)
+                last_found_index = numpy.searchsorted(
+                    row_indices, target_row_indices[-1], side="right")
 
-        num_row_entries = self._row_lengths[row_index]
-        row_entry_start_index = self._row_start_indices[row_index]
-        row_entry_end_index = row_entry_start_index + num_row_entries
-
-        row_entry_index = row_entry_start_index
-
-        if self._load_on_demand and not self._is_data_loaded:
-
-            while row_entry_index < row_entry_end_index:
-
-                byte_index = self._row_data_start_byte + \
-                                row_entry_index * (
-                                     self._num_bytes_column_index +
-                                     self._data_size)
-
-                self._data_buffer.seek(byte_index)
-                entry_column_index = self._unpack_column_index(
-                    self._data_buffer.read(self._num_bytes_column_index))[0]
-
-                if entry_column_index < column_start_index:
-                    row_entry_index += 1
-                    continue
-                if entry_column_index >= column_stop_index:
-                    break
-
-                data_value = self._unpack_data(
-                    self._data_buffer.read(self._data_size))[0]
-                row[entry_column_index - column_start_index] = data_value
-
-                row_entry_index += 1
-        else:
-
-            while row_entry_index < row_entry_end_index:
-
-                column_index = self._row_column_indices[row_entry_index]
-
-                if column_index < column_start_index:
-                    row_entry_index += 1
+                # This means the right-most row of this column is already
+                # before the bounds of the desired slice; we can stop
+                if first_found_index >= num_column_entries:
                     continue
 
-                if column_index >= column_stop_index:
-                    break
+                if last_found_index == 0:
+                    if row_indices[0] != target_row_indices[-1]:
+                        continue
 
-                data_value = self._row_data[row_entry_index]
+                # This means the left-most row of this column is at or beyond
+                # the left bound of the slice. If so, this is where we start
+                if first_found_index == 0:
+                    # If the value is the same, it means the left-most row
+                    # of this column is exactly the start of the slice bound
+                    if row_indices[0] != target_row_indices[0]:
+                        first_found_index = 1
 
-                row[column_index - column_start_index] = data_value
+                if last_found_index == num_column_entries:
+                    if row_indices[last_found_index - 1] != \
+                            target_row_indices[-1]:
+                        last_found_index = num_column_entries - 1
 
-                row_entry_index += 1
-
-        return row
-
-    def get_column(self, column_index, row_slice=None):
-
-        if row_slice is None:
-            row_start_index = 0
-            row_stop_index = self._num_rows
-        else:
-            if row_slice.start is None:
-                row_start_index = 0
-            else:
-                row_start_index = row_slice.start
-            if row_slice.stop is None:
-                row_stop_index = self._num_columns
-            else:
-                row_stop_index = row_slice.stop
-
-        num_rows = row_stop_index - row_start_index
-
-        column = numpy.full((num_rows,), fill_value=self._default_value)
-
-        num_column_entries = self._column_lengths[column_index]
-        column_entry_start_index = self._row_start_indices[column_index]
-        column_entry_end_index = column_entry_start_index + num_column_entries
-
-        column_entry_index = column_entry_start_index
-
-        if self._load_on_demand and not self._is_data_loaded:
-
-            while column_entry_index < column_entry_end_index:
-
-                byte_index = self._column_data_start_byte + \
-                                column_entry_index * (
-                                     self._num_bytes_row_index +
-                                     self._data_size)
-
-                self._data_buffer.seek(byte_index)
-                entry_row_index = self._unpack_row_index(
-                    self._data_buffer.read(self._num_bytes_row_index))[0]
-
-                if entry_row_index < row_start_index:
-                    column_entry_index += 1
-                    continue
-                if entry_row_index >= row_stop_index:
-                    break
-
-                data_value = self._unpack_data(
-                    self._data_buffer.read(self._data_size))[0]
-                column[entry_row_index - row_start_index] = data_value
-
-                column_entry_index += 1
-        else:
-
-            while column_entry_index < column_entry_end_index:
-
-                row_index = self._column_row_indices[column_entry_index]
-
-                if row_index < row_start_index:
-                    column_entry_index += 1
+                if first_found_index >= last_found_index:
                     continue
 
-                if row_index >= row_stop_index:
-                    break
+                found_indices = numpy.arange(first_found_index, last_found_index)
 
-                data_value = self._column_data[column_entry_index]
+                relative_row_indices = \
+                    row_indices[found_indices] - start_row
+                relative_column_index = target_column_index - start_column
+                sliced_array[relative_row_indices, relative_column_index] = \
+                    column_data[found_indices]
 
-                column[row_index - row_start_index] = data_value
-
-                column_entry_index += 1
-
-        return column
+        return sliced_array
 
     def to_list(self):
 
@@ -690,7 +553,7 @@ class Sparse_Data_Table:
     @property
     def row_names(self):
 
-        if self._load_on_demand and not self._is_metadata_loaded:
+        if self._is_metadata_on_buffer:
             self.load_all_metadata()
 
         return self._metadata[Metadata_Type.ROW_NAMES]
@@ -698,7 +561,7 @@ class Sparse_Data_Table:
     @property
     def column_names(self):
 
-        if not self._is_metadata_loaded:
+        if self._is_metadata_on_buffer:
             self.load_all_metadata()
 
         return self._metadata[Metadata_Type.COLUMN_NAMES]
@@ -743,7 +606,7 @@ class Sparse_Data_Table:
     @property
     def metadata(self):
 
-        if self._load_on_demand and not self._is_metadata_loaded:
+        if self._is_metadata_on_buffer:
             self.load_all_metadata()
 
         return self._metadata[Metadata_Type.USER_METADATA]
@@ -751,7 +614,7 @@ class Sparse_Data_Table:
     @metadata.setter
     def metadata(self, user_metadata):
 
-        if self._load_on_demand and not self._is_metadata_loaded:
+        if self._is_metadata_on_buffer:
             self.load_all_metadata()
 
         self._metadata[Metadata_Type.USER_METADATA] = user_metadata
@@ -762,6 +625,11 @@ class Sparse_Data_Table:
             Data_Type.UINT, self._num_rows)
         self._num_bytes_column_index = self.get_num_bytes(
             Data_Type.UINT, self._num_columns)
+
+        self._num_bytes_row_entry = self._num_bytes_column_index + \
+                                    self._data_size
+        self._num_bytes_column_entry = self._num_bytes_row_index + \
+                                       self._data_size
 
         self._max_row_byte = (self._num_bytes_column_index +
                               self._data_size) * self._num_entries
@@ -791,11 +659,10 @@ class Sparse_Data_Table:
         if file_path is None:
             file_path = self._file_path
 
-        if self._load_on_demand:
-            if not self._is_metadata_loaded:
+        if self._is_data_on_buffer:
+            self.load_all_data()
+            if self._is_metadata_on_buffer:
                 self.load_all_metadata()
-            if not self._is_data_loaded:
-                self.load_all_data()
 
         data_buffer = io.BytesIO()
 
@@ -854,7 +721,8 @@ class Sparse_Data_Table:
 
                 data_buffer.write(
                     struct.pack(self._pack_format_column_index, column_index))
-                data_buffer.write(struct.pack(self._pack_format_data, data_value))
+                data_buffer.write(
+                    struct.pack(self._pack_format_data, data_value))
 
         for column_index, column_start_index in enumerate(
                 self._column_start_indices):
@@ -871,7 +739,8 @@ class Sparse_Data_Table:
 
                 data_buffer.write(
                     struct.pack(self._pack_format_row_index, column_index))
-                data_buffer.write(struct.pack(self._pack_format_data, data_value))
+                data_buffer.write(
+                    struct.pack(self._pack_format_data, data_value))
 
         data_buffer.seek(0)
         with open(file_path, "wb") as data_file:
@@ -930,7 +799,7 @@ class Sparse_Data_Table:
 
     def load_all_metadata(self):
 
-        if self._is_metadata_loaded:
+        if not self._is_metadata_on_buffer:
             return
 
         self._data_buffer.seek(HEADER_SIZE)
@@ -939,7 +808,7 @@ class Sparse_Data_Table:
 
         self._load_metadata_from_bytes(metadata_bytes)
 
-        self._is_metadata_loaded = True
+        self._is_metadata_on_buffer = False
 
     def _load_metadata_from_bytes(self, metadata_bytes):
 
@@ -1020,14 +889,7 @@ class Sparse_Data_Table:
     def set_file_path(self, file_path):
 
         file_buffer = open(file_path, "rb")
-
-        if not self._load_on_demand:
-            self._data_buffer = io.BytesIO()
-            self._data_buffer.write(file_buffer.read())
-
-            self._data_buffer.seek(0)
-        else:
-            self._data_buffer = file_buffer
+        self._data_buffer = file_buffer
 
         version_string = self._data_buffer.read(8).decode("UTF-8")
         self._version = int(version_string[4:])
@@ -1041,7 +903,7 @@ class Sparse_Data_Table:
         self._num_entries = struct.unpack("Q", self._data_buffer.read(8))[0]
         self._metadata_size = struct.unpack("Q", self._data_buffer.read(8))[0]
 
-        self._is_metadata_loaded = False
+        self._is_metadata_on_buffer = True
         self._metadata = None
 
         self._calculate_formats()
@@ -1064,7 +926,7 @@ class Sparse_Data_Table:
             self._pack_format_row_index).unpack
 
         # We don't load the data until it is requested
-        self._is_data_loaded = False
+        self._is_data_on_buffer = True
         self._row_column_indices = None
         self._row_data = None
         self._column_row_indices = None
@@ -1091,10 +953,10 @@ class Sparse_Data_Table:
             self._num_bytes_column_index + self._data_size)
 
         row_start_indices_plus_one = \
-            numpy.append(self._row_start_indices,
-                         self._num_bytes_row_byte * self._num_rows)
+            numpy.append(self._row_start_indices, self._num_entries)
 
-        self._row_lengths = numpy.subtract(row_start_indices_plus_one[1:],
+        row_start_indices_plus_one = row_start_indices_plus_one[1:]
+        self._row_lengths = numpy.subtract(row_start_indices_plus_one,
                                            self._row_start_indices)
 
         column_start_indices_bytes = \
@@ -1111,69 +973,67 @@ class Sparse_Data_Table:
             self._column_start_indices,
             self._num_bytes_row_index + self._data_size)
 
-        self._column_lengths = numpy.zeros(
-            (self._num_columns,), dtype=self._pack_format_column_byte)
+        column_start_indices_plus_one = \
+            numpy.append(self._column_start_indices, self._num_entries)
 
-        for column_index, column_start_index in enumerate(
-                self._column_start_indices):
-
-            if column_index == self._num_columns - 1:
-                column_end_index = self._num_entries
-            else:
-                column_end_index = self._column_start_indices[column_index + 1]
-
-            num_column_entries = column_end_index - column_start_index
-
-            self._column_lengths[column_index] = num_column_entries
+        column_start_indices_plus_one = column_start_indices_plus_one[1:]
+        self._column_lengths = numpy.subtract(
+            column_start_indices_plus_one,
+            self._column_start_indices)
 
     def load_all_data(self):
 
-        if self._is_data_loaded:
+        if not self._is_data_on_buffer:
             return
 
         self._data_buffer.seek(self._row_data_start_byte)
 
-        self._row_column_indices = numpy.zeros(
-            (self._num_entries,), dtype=numpy.uint32)
-        self._row_data = numpy.zeros(
-            (self._num_entries,), dtype=numpy.uint32)
+        row_columns_read_length = self._num_bytes_row_entry * self._num_entries
 
-        data_index = 0
+        self._row_column_indices = numpy.ndarray(
+            (self._num_entries,),
+            self._pack_format_column_index,
+            self._data_buffer.read(row_columns_read_length),
+            strides=self._num_bytes_row_entry
+        )
 
-        for row_index, row_start_index in enumerate(self._row_start_indices):
+        self._data_buffer.seek(self._row_data_start_byte +
+                               self._num_bytes_column_index)
 
-            for entry_index in range(self._row_lengths[row_index]):
+        row_data_read_length = \
+            (self._num_bytes_column_index + self._data_size) \
+            * self._num_entries - self._num_bytes_column_index
 
-                column_index = self._unpack_column_index(
-                    self._data_buffer.read(self._num_bytes_column_index))[0]
-                data_value = self._unpack_data(
-                    self._data_buffer.read(self._data_size))[0]
+        self._row_data = numpy.ndarray(
+            (self._num_entries,),
+            self._pack_format_data,
+            self._data_buffer.read(row_data_read_length),
+            strides=self._data_size+self._num_bytes_column_index
+        )
 
-                self._row_column_indices[data_index] = column_index
-                self._row_data[data_index] = data_value
-                data_index += 1
+        column_start_byte = self._data_buffer.tell()
 
-        self._column_row_indices = numpy.zeros(
-            (self._num_entries,), dtype=numpy.uint32)
-        self._column_data = numpy.zeros(
-            (self._num_entries,), dtype=numpy.uint32)
+        column_rows_read_length = self._num_bytes_column_entry * \
+            self._num_entries
 
-        data_index = 0
+        self._column_row_indices = numpy.ndarray(
+            (self._num_entries,),
+            self._pack_format_row_index,
+            self._data_buffer.read(column_rows_read_length),
+            strides=self._num_bytes_column_entry
+        )
 
-        for column_index, column_start_index in enumerate(
-                self._column_start_indices):
+        self._data_buffer.seek(column_start_byte + self._num_bytes_row_index)
 
-            for entry_index in range(self._column_lengths[column_index]):
+        column_data_read_length = \
+            (self._num_bytes_row_index + self._data_size) \
+            * self._num_entries - self._num_bytes_row_index
 
-                row_index = self._unpack_row_index(
-                    self._data_buffer.read(self._num_bytes_row_index))[0]
+        self._column_data = numpy.ndarray(
+            (self._num_entries,),
+            self._pack_format_data,
+            self._data_buffer.read(column_data_read_length),
+            strides=self._num_bytes_column_entry
+        )
 
-                data_value = self._unpack_data(
-                    self._data_buffer.read(self._data_size))[0]
-
-                self._column_row_indices[data_index] = row_index
-                self._column_data[data_index] = data_value
-
-                data_index += 1
-
-        self._is_data_loaded = True
+        self._is_data_on_buffer = False

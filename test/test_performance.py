@@ -3,7 +3,7 @@ import sparsedat
 from scipy import sparse
 import os
 
-test_data_directory = "data"
+test_data_directory = "test"
 
 start_time = time.time()
 sdt = sparsedat.Sparse_Data_Table(

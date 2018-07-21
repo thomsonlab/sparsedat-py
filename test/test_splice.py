@@ -30,8 +30,8 @@ sdt._column_lengths = [2, 1, 0, 1, 1]
 sdt._column_row_indices = [0, 1, 1, 0, 1]
 sdt._column_data = [1, 5, 7, 1, 2]
 sdt._num_entries = 5
-sdt._is_data_loaded = True
-sdt._is_metadata_loaded = True
+sdt._is_data_on_buffer = False
+sdt._load_scipy_matrix()
 
 
-print(sdt[0:2, 1])
+print(sdt[TARGET_INDEX])
