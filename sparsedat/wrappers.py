@@ -87,11 +87,11 @@ def to_coo(sdt):
 
 def to_csr(sdt):
 
-    row_start_indices = sdt._row_start_indices
+    row_start_indices = sdt.row_start_indices
     row_start_indices = numpy.append(row_start_indices, sdt.num_entries - 1)
 
     scipy_array = sparse.csr_matrix(
-        (sdt._row_data, sdt._row_column_indices, row_start_indices),
+        (sdt.row_data, sdt.row_column_indices, row_start_indices),
         shape=sdt.shape)
 
     return scipy_array

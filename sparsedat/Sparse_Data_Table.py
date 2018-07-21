@@ -5,6 +5,8 @@ import numpy
 import io
 import time
 import sys
+import scipy
+from scipy import sparse
 
 from .Data_Type import Data_Type
 from .Metadata_Type import Metadata_Type
@@ -491,6 +493,11 @@ class Sparse_Data_Table:
 
         for row_index in range(self._num_rows):
 
+            # In case we're at the end, we fill up the rest with a pointer
+            # to the last element
+            if entry_index >= self._num_entries:
+                entry_index = self._num_entries - 1
+
             self._row_start_indices.append(entry_index)
 
             if row_index not in row_column_value_map:
@@ -517,6 +524,11 @@ class Sparse_Data_Table:
         self._column_data = []
 
         for column_index in range(self._num_columns):
+
+            # In case we're at the end, we fill up the rest with a pointer
+            # to the last element
+            if entry_index >= self._num_entries:
+                entry_index = self._num_entries - 1
 
             self._column_start_indices.append(entry_index)
 
@@ -618,6 +630,26 @@ class Sparse_Data_Table:
             self.load_all_metadata()
 
         self._metadata[Metadata_Type.USER_METADATA] = user_metadata
+
+    @property
+    def row_data(self):
+
+        if self._is_data_on_buffer:
+            self.load_all_data()
+
+        return self._row_data
+
+    @property
+    def row_column_indices(self):
+
+        if self._is_data_on_buffer:
+            self.load_all_data()
+
+        return self._row_column_indices
+
+    @property
+    def row_start_indices(self):
+        return self._row_start_indices
 
     def _calculate_formats(self):
 

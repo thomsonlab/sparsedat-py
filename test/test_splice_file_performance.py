@@ -72,10 +72,10 @@ if not os.path.exists(scipy_coo_file_path) or \
 # Slicing sequential full rows
 
 NUM_REPETITIONS = 1
-ROWS_TO_SLICE = slice(70, 73, None)
-COLUMNS_TO_SLICE = slice(50, 55, None)
+ROWS_TO_SLICE = slice(None, None, None)
+COLUMNS_TO_SLICE = slice(None, None, None)
 
-num_rows = ROWS_TO_SLICE.stop - ROWS_TO_SLICE.start
+num_rows = 32738 #ROWS_TO_SLICE.stop - ROWS_TO_SLICE.start
 
 
 def load_indices():
@@ -86,8 +86,8 @@ def load_indices():
     del sdt
 
 
-duration = timeit.timeit(load_indices, number=NUM_REPETITIONS) / NUM_REPETITIONS
-print("SDT indices loaded from file: %.4fs" % duration)
+# duration = timeit.timeit(load_indices, number=NUM_REPETITIONS) / NUM_REPETITIONS
+# print("SDT indices loaded from file: %.4fs" % duration)
 
 
 def splice_MTX():
@@ -118,7 +118,7 @@ def splice_CSC():
     scipy_csc_file = open(scipy_csr_file_path, "rb")
     scipy_csc_matrix = sparse.load_npz(scipy_csc_file)
     sliced = scipy_csc_matrix[ROWS_TO_SLICE, COLUMNS_TO_SLICE].todense()
-    print(sliced)
+    # print(sliced)
     scipy_csc_file.close()
 
 duration = timeit.timeit(splice_CSC, number=NUM_REPETITIONS) / NUM_REPETITIONS
@@ -128,9 +128,9 @@ print("Scipy CSC Loaded and sliced %i row(s) from file: %.4fs" %
 def splice_SDT():
     sdt = sparsedat.Sparse_Data_Table(
         os.path.join(test_data_directory, "big.sdt"),
-        load_on_demand=True)
+        load_on_demand=False)
     sliced = sdt[ROWS_TO_SLICE, COLUMNS_TO_SLICE]
-    print(sliced)
+    # print(sliced)
 
     del sdt
 
@@ -143,7 +143,7 @@ def splice_CSR():
     scipy_csr_file = open(scipy_csr_file_path, "rb")
     scipy_csr_matrix = sparse.load_npz(scipy_csr_file)
     sliced = scipy_csr_matrix[ROWS_TO_SLICE, COLUMNS_TO_SLICE].todense()
-    print(sliced)
+    # print(sliced)
     scipy_csr_file.close()
 
 
