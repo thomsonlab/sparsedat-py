@@ -153,6 +153,11 @@ class Sparse_Data_Table:
         else:
             row_index, column_index = index
 
+        if isinstance(row_index, slice) and isinstance(column_index, slice):
+            if row_index.start is None and row_index.stop is None and \
+                    column_index.start is None and column_index.stop is None:
+                return self.to_array()
+
         if isinstance(row_index, slice):
             if row_index.step is not None:
                 raise NotImplementedError(
@@ -404,6 +409,47 @@ class Sparse_Data_Table:
                     column_data[found_indices]
 
         return sliced_array
+
+    def to_array(self):
+
+        if self._is_data_on_buffer:
+            self.load_all_data()
+
+        full_array = numpy.full(
+            (self._num_rows, self._num_columns),
+            fill_value=self._default_value,
+            dtype=self._pack_format_data)
+
+        if self._num_rows >= self._num_columns:
+            for row_index in range(self._num_rows):
+
+                # This is where this row's data entries start
+                row_entry_start_index = self._row_start_indices[row_index]
+
+                # And this is where it ends
+                row_entry_end_index = row_entry_start_index + \
+                    self._row_lengths[row_index]
+
+                full_array[row_index,
+                           self._row_column_indices[
+                           row_entry_start_index:row_entry_end_index]] = \
+                    self._row_data[row_entry_start_index:row_entry_end_index]
+        else:
+            for column_index in range(self._num_columns):
+
+                # This is where this row's data entries start
+                column_entry_start_index = self._column_start_indices[column_index]
+
+                # And this is where it ends
+                column_entry_end_index = column_entry_start_index + \
+                    self._column_lengths[column_index]
+
+                full_array[self._row_column_indices[
+                           column_entry_start_index:column_entry_end_index],
+                           column_index] = \
+                    self._column_data[
+                        column_entry_start_index:column_entry_end_index]
+        return full_array
 
     def to_list(self):
 

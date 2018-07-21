@@ -72,8 +72,8 @@ if not os.path.exists(scipy_coo_file_path) or \
 # Slicing sequential full rows
 
 NUM_REPETITIONS = 1
-ROWS_TO_SLICE = slice(None, None, None)
-COLUMNS_TO_SLICE = slice(None, None, None)
+ROWS_TO_SLICE = slice(1000, 1500, None)
+COLUMNS_TO_SLICE = slice(400, 401, None)
 
 num_rows = 32738 #ROWS_TO_SLICE.stop - ROWS_TO_SLICE.start
 
@@ -128,7 +128,7 @@ print("Scipy CSC Loaded and sliced %i row(s) from file: %.4fs" %
 def splice_SDT():
     sdt = sparsedat.Sparse_Data_Table(
         os.path.join(test_data_directory, "big.sdt"),
-        load_on_demand=False)
+        load_on_demand=True)
     sliced = sdt[ROWS_TO_SLICE, COLUMNS_TO_SLICE]
     # print(sliced)
 
