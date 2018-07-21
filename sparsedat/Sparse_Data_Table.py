@@ -3,10 +3,6 @@ import zlib
 import pickle
 import numpy
 import io
-import time
-import sys
-import scipy
-from scipy import sparse
 
 from .Data_Type import Data_Type
 from .Metadata_Type import Metadata_Type
@@ -302,7 +298,8 @@ class Sparse_Data_Table:
                 if first_found_index >= last_found_index:
                     continue
 
-                found_indices = numpy.arange(first_found_index, last_found_index)
+                found_indices = numpy.arange(
+                    first_found_index, last_found_index)
 
                 relative_column_indices = \
                     column_indices[found_indices] - start_column
@@ -400,7 +397,8 @@ class Sparse_Data_Table:
                 if first_found_index >= last_found_index:
                     continue
 
-                found_indices = numpy.arange(first_found_index, last_found_index)
+                found_indices = numpy.arange(
+                    first_found_index, last_found_index)
 
                 relative_row_indices = \
                     row_indices[found_indices] - start_row
@@ -430,15 +428,17 @@ class Sparse_Data_Table:
                 row_entry_end_index = row_entry_start_index + \
                     self._row_lengths[row_index]
 
-                full_array[row_index,
-                           self._row_column_indices[
-                           row_entry_start_index:row_entry_end_index]] = \
+                full_array[
+                    row_index,
+                    self._row_column_indices[
+                        row_entry_start_index:row_entry_end_index]] = \
                     self._row_data[row_entry_start_index:row_entry_end_index]
         else:
             for column_index in range(self._num_columns):
 
                 # This is where this row's data entries start
-                column_entry_start_index = self._column_start_indices[column_index]
+                column_entry_start_index = \
+                    self._column_start_indices[column_index]
 
                 # And this is where it ends
                 column_entry_end_index = column_entry_start_index + \
@@ -704,10 +704,10 @@ class Sparse_Data_Table:
         self._num_bytes_column_index = self.get_num_bytes(
             Data_Type.UINT, self._num_columns)
 
-        self._num_bytes_row_entry = self._num_bytes_column_index + \
-                                    self._data_size
-        self._num_bytes_column_entry = self._num_bytes_row_index + \
-                                       self._data_size
+        self._num_bytes_row_entry = \
+            self._num_bytes_column_index + self._data_size
+        self._num_bytes_column_entry = \
+            self._num_bytes_row_index + self._data_size
 
         self._max_row_byte = (self._num_bytes_column_index +
                               self._data_size) * self._num_entries
