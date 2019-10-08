@@ -3,13 +3,13 @@ import zlib
 import pickle
 import numpy
 import io
+import scipy
 
 from .Data_Type import Data_Type
 from .Metadata_Type import Metadata_Type
 
 
 CURRENT_VERSION = 1
-USE_COMPRESSION = False
 HEADER_SIZE = 45
 
 
@@ -100,6 +100,8 @@ class Sparse_Data_Table:
         self._default_value = None
         self._row_data = None
         self._column_data = None
+        self._row_name_index_map = None
+        self._column_name_index_map = None
 
         self._num_bytes_row_index = None
         self._num_bytes_column_index = None
@@ -122,7 +124,6 @@ class Sparse_Data_Table:
         self._column_data_start_byte = None
         self._is_data_on_buffer = False
         self._load_on_demand = load_on_demand
-        self._scipy_sparse_matrix = None
 
         self._unpack_data = None
         self._unpack_column_index = None
@@ -130,6 +131,10 @@ class Sparse_Data_Table:
 
         if file_path is not None:
             self.set_file_path(file_path)
+
+            if file_path.endswith(".gz"):
+                self.load_all_data()
+
         if not self._load_on_demand:
             self.load_all_data()
 
@@ -142,6 +147,36 @@ class Sparse_Data_Table:
         raise NotImplementedError("Sparse_Data_Table is read-only for now")
 
     def __getitem__(self, index):
+
+        if isinstance(index, str):
+
+            if self._is_metadata_on_buffer:
+                self.load_all_metadata()
+
+            index = self._row_name_index_map[index]
+        elif isinstance(index, tuple):
+
+            if len(index) != 2:
+                raise ValueError("Only support 2D indexing")
+
+            if isinstance(index[0], str):
+
+                if self._is_metadata_on_buffer:
+                    self.load_all_metadata()
+
+                row_index = self._row_name_index_map[index[0]]
+            else:
+                row_index = index[0]
+            if isinstance(index[1], str):
+
+                if self._is_metadata_on_buffer:
+                    self.load_all_metadata()
+
+                column_index = self._column_name_index_map[index[1]]
+            else:
+                column_index = index[1]
+
+            index = (row_index, column_index)
 
         if isinstance(index, int):
             row_index = index
@@ -192,7 +227,8 @@ class Sparse_Data_Table:
         num_columns = stop_column - start_column
 
         num_row_entries = self._row_lengths[start_row:stop_row].sum()
-        num_column_entries = self._column_lengths[start_row:stop_row].sum()
+        num_column_entries = self._column_lengths[
+                             start_column:stop_column].sum()
 
         if self._default_value == 0:
             sliced_array = numpy.zeros(
@@ -406,6 +442,9 @@ class Sparse_Data_Table:
                 sliced_array[relative_row_indices, relative_column_index] = \
                     column_data[found_indices]
 
+        if sliced_array.shape == (1, 1):
+            return sliced_array[0][0]
+
         return sliced_array
 
     def to_array(self):
@@ -608,6 +647,68 @@ class Sparse_Data_Table:
 
         self._default_value = default_value
 
+    def from_sparse_column_entries(
+            self,
+            data_rows_columns,
+            num_rows,
+            num_columns,
+            default_value=0):
+
+        self._num_rows = num_rows
+        self._num_columns = num_columns
+        self._num_entries = len(data_rows_columns[0])
+        self._default_value = default_value
+
+        min_value = data_rows_columns[0].min()
+        max_value = data_rows_columns[0].max()
+        first_value = data_rows_columns[0][0]
+
+        if isinstance(first_value, int) or issubclass(
+                data_rows_columns[0].dtype.type, numpy.integer):
+            if min_value >= 0:
+                self._data_type = Data_Type.UINT
+            else:
+                self._data_type = Data_Type.INT
+        else:
+            self._data_type = Data_Type.FLOAT
+
+        self._data_size = Sparse_Data_Table.get_num_bytes(
+            self._data_type, max_value, min_value=min_value
+        )
+
+        self._calculate_formats()
+        self._column_start_indices = numpy.array(data_rows_columns[2])
+
+        column_start_indices_plus_one = \
+            numpy.append(self._column_start_indices, self._num_entries)
+
+        column_start_indices_plus_one = column_start_indices_plus_one[1:]
+        self._column_lengths = numpy.subtract(
+            column_start_indices_plus_one,
+            self._column_start_indices
+        )
+
+        self._column_data = numpy.array(data_rows_columns[0])
+        self._column_row_indices = numpy.array(data_rows_columns[1])
+
+        scipy_sparse_csc = scipy.sparse.csc_matrix(data_rows_columns,
+                                                   (num_rows, num_columns))
+        scipy_sparse_csr = scipy_sparse_csc.tocsr(True)
+
+        self._row_start_indices = numpy.array(scipy_sparse_csr.indptr)
+
+        row_start_indices_plus_one = \
+            numpy.append(self._row_start_indices, self._num_entries)
+
+        row_start_indices_plus_one = row_start_indices_plus_one[1:]
+        self._row_lengths = numpy.subtract(
+            row_start_indices_plus_one,
+            self._row_start_indices
+        )
+
+        self._row_data = numpy.array(scipy_sparse_csr.data)
+        self._row_column_indices = numpy.array(scipy_sparse_csr.indices)
+
     @property
     def row_names(self):
 
@@ -632,6 +733,11 @@ class Sparse_Data_Table:
 
         self._metadata[Metadata_Type.ROW_NAMES] = new_row_names
 
+        self._row_name_index_map = {
+            row_name: index for index, row_name in
+            enumerate(self._metadata[Metadata_Type.ROW_NAMES])
+        }
+
     @column_names.setter
     def column_names(self, new_column_names):
 
@@ -640,6 +746,11 @@ class Sparse_Data_Table:
             raise ValueError("Column names must match number of columns!")
 
         self._metadata[Metadata_Type.COLUMN_NAMES] = new_column_names
+
+        self._column_name_index_map = {
+            column_name: index for index, column_name in
+            enumerate(self._metadata[Metadata_Type.COLUMN_NAMES])
+        }
 
     @property
     def num_rows(self):
@@ -822,7 +933,7 @@ class Sparse_Data_Table:
 
         data_buffer.seek(0)
         with open(file_path, "wb") as data_file:
-            if USE_COMPRESSION:
+            if file_path.endswith(".gz"):
                 data_file.write(zlib.compress(data_buffer.read()))
             else:
                 data_file.write(data_buffer.read())
@@ -964,10 +1075,26 @@ class Sparse_Data_Table:
                 raise NotImplementedError("Metadata type %i not implemented." %
                                           metadata_type.value)
 
+        if Metadata_Type.COLUMN_NAMES in self._metadata:
+            self._column_name_index_map = {
+                column_name: index for index, column_name in
+                enumerate(self._metadata[Metadata_Type.COLUMN_NAMES])
+            }
+
+        if Metadata_Type.ROW_NAMES in self._metadata:
+            self._row_name_index_map = {
+                row_name: index for index, row_name in
+                enumerate(self._metadata[Metadata_Type.ROW_NAMES])
+            }
+
     def set_file_path(self, file_path):
 
         file_buffer = open(file_path, "rb")
-        self._data_buffer = file_buffer
+        if file_path.endswith(".gz"):
+            self._data_buffer = io.BytesIO(zlib.decompress(file_buffer.read()))
+            file_buffer.close()
+        else:
+            self._data_buffer = file_buffer
 
         version_string = self._data_buffer.read(8).decode("UTF-8")
         self._version = int(version_string[4:])
