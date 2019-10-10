@@ -323,11 +323,11 @@ class Sparse_Data_Table:
                 if first_found_index == 0:
                     # If the value is the same, it means the left-most column
                     # of this row is exactly the start of the slice bound
-                    if column_indices[0] != target_column_indices[0]:
+                    if column_indices[0] < target_column_indices[0]:
                         first_found_index = 1
 
                 if last_found_index == num_row_entries:
-                    if column_indices[last_found_index - 1] != \
+                    if column_indices[last_found_index - 1] > \
                             target_column_indices[-1]:
                         last_found_index = num_row_entries - 1
 
@@ -422,11 +422,11 @@ class Sparse_Data_Table:
                 if first_found_index == 0:
                     # If the value is the same, it means the left-most row
                     # of this column is exactly the start of the slice bound
-                    if row_indices[0] != target_row_indices[0]:
+                    if row_indices[0] < target_row_indices[0]:
                         first_found_index = 1
 
                 if last_found_index == num_column_entries:
-                    if row_indices[last_found_index - 1] != \
+                    if row_indices[last_found_index - 1] > \
                             target_row_indices[-1]:
                         last_found_index = num_column_entries - 1
 
@@ -446,6 +446,128 @@ class Sparse_Data_Table:
             return sliced_array[0][0]
 
         return sliced_array
+
+    def get_row_index(self, index):
+
+        if isinstance(index, int):
+            return index
+
+        if index not in self._row_name_index_map:
+            raise ValueError("Row %s does not exist" % index)
+
+        return self._row_name_index_map[index]
+
+    def get_column_index(self, index):
+
+        if isinstance(index, int):
+            return index
+
+        if index not in self._column_name_index_map:
+            raise ValueError("Column %s does not exist" % index)
+
+        return self._column_name_index_map[index]
+
+    def add_row(self, index_values):
+        """
+        Add a row to this sparse data table with the given index values.
+        :param index_values: An iterable of tuples of indices and the value at that
+            index. Indices can be either numerical or column names. All unspecified
+            values are assumed to be self._default_value
+        :return: None
+        """
+
+        if self._is_data_on_buffer:
+            raise NotImplementedError("Adding rows to on-disk sdt is not "
+                                      "supported")
+
+        row_data_to_add = []
+        row_column_indices_to_add = []
+
+        for index, value in index_values:
+
+            try:
+                column_index = self.get_column_index(index)
+            except ValueError:
+                continue
+
+            if value == self._default_value:
+                continue
+
+            row_data_to_add.append(value)
+            row_column_indices_to_add.append(column_index)
+
+        self._row_start_indices = numpy.append(
+            self._row_start_indices, len(self._row_data))
+        self._row_lengths = numpy.append(
+            self._row_lengths, len(row_data_to_add))
+
+        self._row_data = numpy.resize(
+            self._row_data,
+            (
+                self._row_data.shape[0] + len(row_data_to_add),
+            )
+        )
+
+        self._row_column_indices = numpy.resize(
+            self._row_column_indices,
+            (
+                self._row_column_indices.shape[0] +
+                len(row_column_indices_to_add),
+            )
+        )
+
+        self._row_data[-len(row_data_to_add):] = row_data_to_add
+        self._row_column_indices[-len(row_column_indices_to_add):] = \
+            row_column_indices_to_add
+
+        self._num_rows += 1
+
+        new_column_data = numpy.ndarray(
+            self._row_data.shape,
+            dtype=self._column_data.dtype
+        )
+
+        new_column_row_indices = numpy.ndarray(
+            self._row_column_indices.shape,
+            dtype=self._column_row_indices.dtype
+        )
+
+        previous_entry_index = 0
+        num_entries_added = 0
+        previous_column_index = 0
+
+        new_row_index = self._num_rows - 1
+
+        # Loop through each column that had a value added
+        for value, column_index in \
+                zip(row_data_to_add, row_column_indices_to_add):
+            entry_index = previous_entry_index + \
+                          self._column_lengths[previous_column_index:
+                                               column_index].sum()
+
+            previous_new_entry_index = previous_entry_index + num_entries_added
+
+            new_entry_index = entry_index + num_entries_added
+
+            # Copy over all the data from the last column
+            new_column_data[previous_new_entry_index:new_entry_index] = \
+                self._column_data[previous_entry_index:entry_index]
+
+            new_column_row_indices[previous_new_entry_index:new_entry_index] \
+                = self._column_row_indices[previous_entry_index:entry_index]
+
+            new_column_data[new_entry_index] = value
+            new_column_row_indices[new_entry_index] = new_row_index
+
+            self._column_lengths[column_index] += 1
+            self._column_start_indices[column_index:] += 1
+
+            previous_column_index = column_index
+            previous_entry_index = entry_index
+            num_entries_added += 1
+
+        self._column_data = new_column_data
+        self._column_row_indices = new_column_row_indices
 
     def to_array(self):
 
