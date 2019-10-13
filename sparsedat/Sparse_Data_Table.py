@@ -3,8 +3,9 @@ import zlib
 import pickle
 import numpy
 import io
-import scipy
+from scipy import sparse
 from enum import Enum
+import pandas
 
 from .Data_Type import Data_Type
 from .Metadata_Type import Metadata_Type
@@ -94,7 +95,7 @@ class Sparse_Data_Table:
     def __init__(
             self,
             file_path=None,
-            load_on_demand=True):
+            load_on_demand=False):
 
         # If this SDT has a location on disk, this is it
         self._file_path = None
@@ -122,10 +123,8 @@ class Sparse_Data_Table:
         self._row_data = None
         self._column_data = None
 
-
         self._row_name_index_map = None
         self._column_name_index_map = None
-
 
         # Information about how to store data when writing it out
         self._data_type = None
@@ -161,6 +160,7 @@ class Sparse_Data_Table:
                 self.load_all_data()
 
         if not self._load_on_demand:
+            self.load_all_metadata()
             self.load_all_data()
 
     def __del__(self):
@@ -173,79 +173,27 @@ class Sparse_Data_Table:
 
     def get_indices_from_slices(self, index):
 
-        if isinstance(index, str):
-
-            if self._is_metadata_on_buffer:
-                self.load_all_metadata()
-
-            index = self._row_name_index_map[index]
-        elif isinstance(index, tuple):
+        if isinstance(index, tuple):
 
             if len(index) != 2:
                 raise ValueError("Only support 2D indexing")
 
-            if isinstance(index[0], str):
+            row_index = index[0]
+            column_index = index[1]
 
-                if self._is_metadata_on_buffer:
-                    self.load_all_metadata()
-
-                row_index = self._row_name_index_map[index[0]]
-            elif hasattr(index[0], "__len__"):
-                if isinstance(index[0][0], str):
-                    row_index = [self._row_name_index_map[i] for i in
-                        index[0]]
-                elif isinstance(index[0][0], bool) or \
-                        isinstance(index[0][0], numpy.bool_):
-                    row_index = [i for i, x in enumerate(index[0]) if x]
-                else:
-                    row_index = index[0]
-            else:
-                row_index = index[0]
-
-            if isinstance(index[1], str):
-
-                if self._is_metadata_on_buffer:
-                    self.load_all_metadata()
-
-                column_index = self._column_name_index_map[index[1]]
-            elif hasattr(index[1], "__len__"):
-                if isinstance(index[1][0], str):
-                    column_index = [self._column_name_index_map[i]
-                                    for i in index[1]]
-                elif isinstance(index[1][0], bool) or \
-                        isinstance(index[1][0], numpy.bool_):
-                    column_index = [i for i, x in enumerate(index[1]) if x]
-                else:
-                    column_index = index[1]
-            else:
-                column_index = index[1]
-
-            index = (row_index, column_index)
-
-        if isinstance(index, int) or isinstance(index, list):
-            row_index = index
-            column_index = slice(None, None, None)
         else:
-            row_index, column_index = index
-
-        if isinstance(row_index, slice) and isinstance(column_index, slice):
-            if row_index.start is None and row_index.stop is None and \
-                    column_index.start is None and column_index.stop is None:
-                return self.to_array()
-
-        row_indices = []
-        column_indices = []
+            row_index = index
+            column_index = list(range(self._num_columns))
 
         if isinstance(row_index, slice):
-
             row_indices = list(range(
                 if_none(row_index.start, 0),
                 if_none(row_index.stop, self._num_rows),
                 if_none(row_index.step, 1)
             ))
-        elif isinstance(row_index, int):
+        elif isinstance(row_index, str) or not hasattr(row_index, "__len__"):
             row_indices = [row_index]
-        elif isinstance(row_index, list):
+        else:
             row_indices = row_index
 
         if isinstance(column_index, slice):
@@ -255,12 +203,48 @@ class Sparse_Data_Table:
                 if_none(column_index.stop, self._num_columns),
                 if_none(column_index.step, 1)
             ))
-        elif isinstance(column_index, int):
+        elif isinstance(column_index, str) or \
+                not hasattr(column_index, "__len__"):
             column_indices = [column_index]
-        elif isinstance(column_index, list):
+        else:
             column_indices = column_index
 
+        if isinstance(row_indices[0], str):
+
+            row_indices = [
+                self._row_name_index_map[i] for i in row_indices
+            ]
+        elif isinstance(row_indices[0], bool) or \
+                isinstance(row_indices[0], numpy.bool_):
+            row_indices = [i for i, x in enumerate(row_indices) if x]
+
+        if isinstance(column_indices[0], str):
+
+            column_indices = [
+                self._column_name_index_map[i] for i in column_indices
+            ]
+        elif isinstance(column_indices[0], bool) or \
+                isinstance(column_indices[0], numpy.bool_):
+            column_indices = [i for i, x in enumerate(column_indices) if x]
+
         return row_indices, column_indices
+
+    def __repr__(self):
+
+        if Sparse_Data_Table.OUTPUT_MODE == Output_Mode.PANDAS:
+            return self.to_pandas().__repr__()
+
+        return self.to_array().__repr__()
+
+    def __str__(self):
+
+        if Sparse_Data_Table.OUTPUT_MODE == Output_Mode.PANDAS:
+            return self.to_pandas().__str__()
+
+        return self.to_array().__str__()
+
+    def _repr_html_(self):
+        return self.to_pandas()._repr_html_()
 
     def get_sub_SDT(self, row_indices, column_indices):
 
@@ -277,6 +261,10 @@ class Sparse_Data_Table:
                                   for i in column_indices])
 
         if num_row_entries < num_column_entries:
+
+            # We're going to create a new SDT with only the requested rows,
+            # but without filtering any columns (to avoid searching for the
+            # existence of each column in each row)
 
             row_data = numpy.ndarray(
                 (num_row_entries,),
@@ -317,9 +305,30 @@ class Sparse_Data_Table:
             new_SDT.from_sparse_row_entries(
                 (row_data, row_column_indices, row_start_indices),
                 num_rows,
-                num_columns,
+                self._num_columns,
                 self._default_value
             )
+
+            if Metadata_Type.ROW_NAMES in self._metadata:
+                new_SDT._metadata[Metadata_Type.ROW_NAMES] = []
+                new_SDT._row_name_index_map = {}
+
+                for new_row_index, row_index in enumerate(row_indices):
+                    row_name = self._metadata[Metadata_Type.ROW_NAMES][
+                        row_index]
+                    new_SDT._metadata[Metadata_Type.ROW_NAMES].append(row_name)
+                    new_SDT._row_name_index_map[row_name] = new_row_index
+
+            if Metadata_Type.COLUMN_NAMES in self._metadata:
+                new_SDT._metadata[Metadata_Type.COLUMN_NAMES] = \
+                    self._metadata[Metadata_Type.COLUMN_NAMES].copy()
+
+            # Now we have an SDT with all the requested rows; if we need to
+            # filter out columns, we repeat the process
+            if num_columns < self._num_columns:
+                return new_SDT.get_sub_SDT(
+                    list(range(num_rows)), column_indices
+                )
 
         else:
 
@@ -363,37 +372,82 @@ class Sparse_Data_Table:
 
             new_SDT.from_sparse_column_entries(
                 (column_data, column_row_indices, column_start_indices),
-                num_rows,
+                self._num_rows,
                 num_columns,
                 self._default_value
             )
 
-        if Metadata_Type.ROW_NAMES in self._metadata:
-            new_SDT._metadata[Metadata_Type.ROW_NAMES] = []
-            new_SDT._row_name_index_map = {}
+            if Metadata_Type.ROW_NAMES in self._metadata:
+                new_SDT._metadata[Metadata_Type.ROW_NAMES] = \
+                    self._metadata[Metadata_Type.ROW_NAMES].copy()
 
-            for new_row_index, row_index in enumerate(row_indices):
-                row_name = self._metadata[Metadata_Type.ROW_NAMES][row_index]
-                new_SDT._metadata[Metadata_Type.ROW_NAMES].append(row_name)
-                new_SDT._row_name_index_map[row_name] = new_row_index
+            if Metadata_Type.COLUMN_NAMES in self._metadata:
+                new_SDT._metadata[Metadata_Type.COLUMN_NAMES] = []
+                new_SDT._column_name_index_map = {}
 
-        if Metadata_Type.COLUMN_NAMES in self._metadata:
-            new_SDT._metadata[Metadata_Type.COLUMN_NAMES] = []
-            new_SDT._column_name_index_map = {}
+                for new_column_index, column_index in enumerate(column_indices):
+                    column_name = self._metadata[Metadata_Type.COLUMN_NAMES][
+                        column_index]
+                    new_SDT._metadata[Metadata_Type.COLUMN_NAMES].append(
+                        column_name
+                    )
+                    new_SDT._column_name_index_map[
+                        column_name] = new_column_index
 
-            for new_column_index, column_index in enumerate(column_indices):
-                column_name = self._metadata[Metadata_Type.COLUMN_NAMES][
-                    column_index]
-                new_SDT._metadata[Metadata_Type.COLUMN_NAMES].append(
-                    column_name
+            # Now we have an SDT with all the requested columns; if we need to
+            # filter out rows, we repeat the process
+            if num_rows < self._num_rows:
+                return new_SDT.get_sub_SDT(
+                    row_indices,
+                    list(range(num_columns))
                 )
-                new_SDT._column_name_index_map[column_name] = new_column_index
 
         return new_SDT
 
     def __getitem__(self, index):
 
+        # Special case for all item getter
+        if len(index) == 2:
+
+            row_index = index[0]
+            column_index = index[1]
+
+            if isinstance(row_index, slice) and isinstance(column_index, slice):
+                if row_index.start is None and row_index.stop is None and \
+                        column_index.start is None and column_index.stop is None:
+                    if Sparse_Data_Table.OUTPUT_MODE == Output_Mode.SDT or \
+                            Sparse_Data_Table.OUTPUT_MODE == Output_Mode.NUMPY:
+                        return self.to_array()
+                    elif Sparse_Data_Table.OUTPUT_MODE == Output_Mode.PANDAS:
+                        return self.to_pandas()
+                    else:
+                        raise NotImplementedError("Invalid output mode")
+
         row_indices, column_indices = self.get_indices_from_slices(index)
+
+        # Special case for single item getter
+        if len(row_indices) == 1 and len(column_indices) == 1:
+            row_index = row_indices[0]
+            column_index = column_indices[0]
+            row_length = self._row_lengths[row_index]
+            row_start_index = self._row_start_indices[row_index]
+            row_column_indices = self._row_column_indices[
+                row_start_index:row_start_index+row_length
+            ]
+
+            if len(row_column_indices) == 0:
+                return self._default_value
+
+            relative_column_index = numpy.searchsorted(
+                row_column_indices, column_index)
+
+            if relative_column_index >= len(row_column_indices):
+                return self._default_value
+
+            if row_column_indices[relative_column_index] != column_index:
+                return self._default_value
+
+            return self._row_data[row_start_index+relative_column_index]
 
         if Sparse_Data_Table.OUTPUT_MODE == Output_Mode.SDT:
             return self.get_sub_SDT(row_indices, column_indices)
@@ -621,7 +675,11 @@ class Sparse_Data_Table:
             return sliced_array[0][0]
 
         elif Sparse_Data_Table.OUTPUT_MODE == Output_Mode.PANDAS:
-            raise NotImplementedError("Haven't added Pandas conversion")
+            return pandas.DataFrame(
+                sliced_array,
+                index=[self.row_names[i] for i in target_row_indices],
+                columns=[self.column_names[i] for i in target_column_indices]
+            )
         elif Sparse_Data_Table.OUTPUT_MODE == Output_Mode.NUMPY:
             return sliced_array
         else:
@@ -946,6 +1004,14 @@ class Sparse_Data_Table:
                         column_entry_start_index:column_entry_end_index]
         return full_array
 
+    def to_pandas(self):
+
+        return pandas.DataFrame(
+            self.to_array(),
+            index=self.row_names,
+            columns=self.column_names
+        )
+
     def to_list(self):
 
         array = [
@@ -1115,22 +1181,26 @@ class Sparse_Data_Table:
         self._num_entries = len(data_rows_columns[0])
         self._default_value = default_value
 
-        min_value = data_rows_columns[0].min()
-        max_value = data_rows_columns[0].max()
-        first_value = data_rows_columns[0][0]
-
-        if isinstance(first_value, int) or issubclass(
-                data_rows_columns[0].dtype.type, numpy.integer):
-            if min_value >= 0:
-                self._data_type = Data_Type.UINT
-            else:
-                self._data_type = Data_Type.INT
-        else:
+        if len(data_rows_columns[0]) == 0:
             self._data_type = Data_Type.FLOAT
+            self._data_size = 8
+        else:
+            min_value = data_rows_columns[0].min()
+            max_value = data_rows_columns[0].max()
+            first_value = data_rows_columns[0][0]
 
-        self._data_size = Sparse_Data_Table.get_num_bytes(
-            self._data_type, max_value, min_value=min_value
-        )
+            if isinstance(first_value, int) or issubclass(
+                    data_rows_columns[0].dtype.type, numpy.integer):
+                if min_value >= 0:
+                    self._data_type = Data_Type.UINT
+                else:
+                    self._data_type = Data_Type.INT
+            else:
+                self._data_type = Data_Type.FLOAT
+
+            self._data_size = Sparse_Data_Table.get_num_bytes(
+                self._data_type, max_value, min_value=min_value
+            )
 
         self._calculate_formats()
         self._column_start_indices = numpy.array(data_rows_columns[2])
@@ -1147,8 +1217,8 @@ class Sparse_Data_Table:
         self._column_data = numpy.array(data_rows_columns[0])
         self._column_row_indices = numpy.array(data_rows_columns[1])
 
-        scipy_sparse_csc = scipy.sparse.csc_matrix(data_rows_columns,
-                                                   (num_rows, num_columns))
+        scipy_sparse_csc = sparse.csc_matrix(data_rows_columns,
+                                             (num_rows, num_columns))
         scipy_sparse_csr = scipy_sparse_csc.tocsr(True)
 
         self._row_start_indices = numpy.array(scipy_sparse_csr.indptr)
@@ -1177,22 +1247,26 @@ class Sparse_Data_Table:
         self._num_entries = len(data_columns_rows[0])
         self._default_value = default_value
 
-        min_value = data_columns_rows[0].min()
-        max_value = data_columns_rows[0].max()
-        first_value = data_columns_rows[0][0]
-
-        if isinstance(first_value, int) or issubclass(
-                data_columns_rows[0].dtype.type, numpy.integer):
-            if min_value >= 0:
-                self._data_type = Data_Type.UINT
-            else:
-                self._data_type = Data_Type.INT
-        else:
+        if len(data_columns_rows[0]) == 0:
             self._data_type = Data_Type.FLOAT
+            self._data_size = 8
+        else:
+            min_value = data_columns_rows[0].min()
+            max_value = data_columns_rows[0].max()
+            first_value = data_columns_rows[0][0]
 
-        self._data_size = Sparse_Data_Table.get_num_bytes(
-            self._data_type, max_value, min_value=min_value
-        )
+            if isinstance(first_value, int) or issubclass(
+                    data_columns_rows[0].dtype.type, numpy.integer):
+                if min_value >= 0:
+                    self._data_type = Data_Type.UINT
+                else:
+                    self._data_type = Data_Type.INT
+            else:
+                self._data_type = Data_Type.FLOAT
+
+            self._data_size = Sparse_Data_Table.get_num_bytes(
+                self._data_type, max_value, min_value=min_value
+            )
 
         self._calculate_formats()
         self._row_start_indices = numpy.array(data_columns_rows[2])
@@ -1209,8 +1283,8 @@ class Sparse_Data_Table:
         self._row_data = numpy.array(data_columns_rows[0])
         self._row_column_indices = numpy.array(data_columns_rows[1])
 
-        scipy_sparse_csr = scipy.sparse.csr_matrix(data_columns_rows,
-                                                   (num_rows, num_columns))
+        scipy_sparse_csr = sparse.csr_matrix(data_columns_rows,
+                                             (num_rows, num_columns))
         scipy_sparse_csc = scipy_sparse_csr.tocsc(True)
 
         self._column_start_indices = numpy.array(scipy_sparse_csc.indptr)
@@ -1233,6 +1307,9 @@ class Sparse_Data_Table:
         if self._is_metadata_on_buffer:
             self.load_all_metadata()
 
+        if Metadata_Type.ROW_NAMES not in self._metadata:
+            return [str[i] for i in range(self._num_rows)]
+
         return self._metadata[Metadata_Type.ROW_NAMES]
 
     @property
@@ -1240,6 +1317,10 @@ class Sparse_Data_Table:
 
         if self._is_metadata_on_buffer:
             self.load_all_metadata()
+
+        if Metadata_Type.COLUMN_NAMES not in self._metadata:
+            return [str[i] for i in range(self._num_columns)]
+
 
         return self._metadata[Metadata_Type.COLUMN_NAMES]
 
@@ -1509,6 +1590,10 @@ class Sparse_Data_Table:
         if not self._is_metadata_on_buffer:
             return
 
+        if not self._data_buffer:
+            self._is_metadata_on_buffer = False
+            return
+
         self._data_buffer.seek(HEADER_SIZE)
 
         metadata_bytes = self._data_buffer.read(self._metadata_size)
@@ -1702,6 +1787,10 @@ class Sparse_Data_Table:
     def load_all_data(self):
 
         if not self._is_data_on_buffer:
+            return
+
+        if not self._data_buffer:
+            self._is_data_on_buffer = False
             return
 
         self._data_buffer.seek(self._row_data_start_byte)
