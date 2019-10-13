@@ -2,7 +2,7 @@ from distutils.core import setup
 
 setup(
     name="sparsedat",
-    version="0.1",
+    version="1.0.0alpha",
     packages=[
         "sparsedat"
     ],
