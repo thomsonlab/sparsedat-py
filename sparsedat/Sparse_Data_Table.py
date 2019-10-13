@@ -322,6 +322,8 @@ class Sparse_Data_Table:
             if Metadata_Type.COLUMN_NAMES in self._metadata:
                 new_SDT._metadata[Metadata_Type.COLUMN_NAMES] = \
                     self._metadata[Metadata_Type.COLUMN_NAMES].copy()
+                new_SDT._column_name_index_map = \
+                    self._column_name_index_map.copy()
 
             # Now we have an SDT with all the requested rows; if we need to
             # filter out columns, we repeat the process
@@ -380,6 +382,8 @@ class Sparse_Data_Table:
             if Metadata_Type.ROW_NAMES in self._metadata:
                 new_SDT._metadata[Metadata_Type.ROW_NAMES] = \
                     self._metadata[Metadata_Type.ROW_NAMES].copy()
+                new_SDT._row_name_index_map = \
+                    self._row_name_index_map.copy()
 
             if Metadata_Type.COLUMN_NAMES in self._metadata:
                 new_SDT._metadata[Metadata_Type.COLUMN_NAMES] = []
