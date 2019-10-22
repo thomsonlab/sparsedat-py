@@ -1137,10 +1137,10 @@ class Sparse_Data_Table:
 
         entry_index = 0
 
-        self._row_start_indices = []
-        self._row_lengths = []
-        self._row_column_indices = []
-        self._row_data = []
+        row_start_indices = []
+        row_lengths = []
+        row_column_indices = []
+        row_data = []
 
         for row_index in range(self._num_rows):
 
@@ -1149,10 +1149,10 @@ class Sparse_Data_Table:
             if entry_index >= self._num_entries:
                 entry_index = self._num_entries - 1
 
-            self._row_start_indices.append(entry_index)
+            row_start_indices.append(entry_index)
 
             if row_index not in row_column_value_map:
-                self._row_lengths.append(0)
+                row_lengths.append(0)
                 continue
 
             column_value_map = row_column_value_map[row_index]
@@ -1161,18 +1161,18 @@ class Sparse_Data_Table:
 
             entry_index += num_entries
 
-            self._row_lengths.append(num_entries)
+            row_lengths.append(num_entries)
 
             for column_index in sorted(column_value_map.keys()):
-                self._row_column_indices.append(column_index)
-                self._row_data.append(column_value_map[column_index])
+                row_column_indices.append(column_index)
+                row_data.append(column_value_map[column_index])
 
         entry_index = 0
 
-        self._column_start_indices = []
-        self._column_lengths = []
-        self._column_row_indices = []
-        self._column_data = []
+        column_start_indices = []
+        column_lengths = []
+        column_row_indices = []
+        column_data = []
 
         for column_index in range(self._num_columns):
 
@@ -1181,10 +1181,10 @@ class Sparse_Data_Table:
             if entry_index >= self._num_entries:
                 entry_index = self._num_entries - 1
 
-            self._column_start_indices.append(entry_index)
+            column_start_indices.append(entry_index)
 
             if column_index not in column_row_value_map:
-                self._column_lengths.append(0)
+                column_lengths.append(0)
                 continue
 
             row_value_map = column_row_value_map[column_index]
@@ -1193,11 +1193,11 @@ class Sparse_Data_Table:
 
             entry_index += num_entries
 
-            self._column_lengths.append(num_entries)
+            column_lengths.append(num_entries)
 
             for row_index in sorted(row_value_map.keys()):
-                self._column_row_indices.append(row_index)
-                self._column_data.append(row_value_map[row_index])
+                column_row_indices.append(row_index)
+                column_data.append(row_value_map[row_index])
 
         if isinstance(first_value, int):
             if not has_negative_values:
@@ -1210,6 +1210,40 @@ class Sparse_Data_Table:
 
         self._data_size = Sparse_Data_Table.get_num_bytes(
             self._data_type, max_value, min_value=min_value)
+
+        self._calculate_formats()
+
+        self._row_start_indices = numpy.array(
+            row_start_indices, dtype=self._pack_format_row_index
+        )
+
+        self._row_lengths = numpy.array(
+            row_lengths, dtype=self._pack_format_row_index
+        )
+
+        self._row_column_indices = numpy.array(
+            row_column_indices, dtype=self._pack_format_column_index
+        )
+
+        self._row_data = numpy.array(
+            row_data, dtype=self._pack_format_data
+        )
+
+        self._column_start_indices = numpy.array(
+            column_start_indices, dtype=self._pack_format_column_index
+        )
+
+        self._column_lengths = numpy.array(
+            column_lengths, dtype=self._pack_format_column_index
+        )
+
+        self._column_row_indices = numpy.array(
+            column_row_indices, dtype=self._pack_format_row_index
+        )
+
+        self._column_data = numpy.array(
+            column_data, dtype=self._pack_format_data
+        )
 
         self._default_value = default_value
 
