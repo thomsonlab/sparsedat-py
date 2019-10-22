@@ -699,6 +699,46 @@ class Sparse_Data_Table:
 
         return self._row_name_index_map[index]
 
+    def sum(self, axis=None):
+        """
+        Return the sum along a specific axis. If none is specified, the sum of
+        the whole table is returned.
+        :param axis: 0 for sum of each row, 1 for sum of each column, None for
+            sum of whole table
+        :return: The sum as specified by axis
+        """
+
+        if axis is None:
+            return self._row_data.sum()
+
+        if axis == 0:
+            sums = numpy.zeros((self._num_rows, ))
+
+            for row in range(self._num_rows - 1):
+                start_index = self._row_start_indices[row]
+                end_index = self._row_start_indices[row + 1]
+
+                sums[row] = self._row_data[start_index:end_index].sum()
+
+            sums[-1] = self._row_data[self._row_start_indices[-1]:].sum()
+
+            return sums
+
+        elif axis == 1:
+            sums = numpy.zeros((self._num_columns, ))
+
+            for column in range(self._num_columns - 1):
+                start_index = self._column_start_indices[column]
+                end_index = self._column_start_indices[column + 1]
+
+                sums[column] = self._column_data[start_index:end_index].sum()
+
+            sums[-1] = self._column_data[self._column_start_indices[-1]:].sum()
+
+            return sums
+        else:
+            raise ValueError("Axis must be one of {0, 1, None}")
+
     def get_column_index(self, index):
 
         if isinstance(index, int):
@@ -1189,8 +1229,8 @@ class Sparse_Data_Table:
             self._data_type = Data_Type.FLOAT
             self._data_size = 8
         else:
-            min_value = data_rows_columns[0].min()
-            max_value = data_rows_columns[0].max()
+            min_value = numpy.min(data_rows_columns[0])
+            max_value = numpy.max(data_rows_columns[0])
             first_value = data_rows_columns[0][0]
 
             if isinstance(first_value, int) or issubclass(
@@ -1209,6 +1249,10 @@ class Sparse_Data_Table:
         self._calculate_formats()
         self._column_start_indices = numpy.array(data_rows_columns[2])
 
+        # In case people followed scipy csr format, we'll be nice
+        if len(self._column_start_indices) == num_columns + 1:
+            self._column_start_indices = self._column_start_indices[0:-1]
+
         column_start_indices_plus_one = \
             numpy.append(self._column_start_indices, self._num_entries)
 
@@ -1221,8 +1265,15 @@ class Sparse_Data_Table:
         self._column_data = numpy.array(data_rows_columns[0])
         self._column_row_indices = numpy.array(data_rows_columns[1])
 
-        scipy_sparse_csc = sparse.csc_matrix(data_rows_columns,
-                                             (num_rows, num_columns))
+        scipy_sparse_csc = sparse.csc_matrix(
+            (
+                self._column_data,
+                self._column_row_indices,
+                numpy.append(self._column_start_indices, self._num_entries)
+            ),
+            (num_rows, num_columns)
+        )
+
         scipy_sparse_csr = scipy_sparse_csc.tocsr(True)
 
         self._row_start_indices = numpy.array(scipy_sparse_csr.indptr)
@@ -1255,8 +1306,8 @@ class Sparse_Data_Table:
             self._data_type = Data_Type.FLOAT
             self._data_size = 8
         else:
-            min_value = data_columns_rows[0].min()
-            max_value = data_columns_rows[0].max()
+            min_value = numpy.min(data_columns_rows[0])
+            max_value = numpy.max(data_columns_rows[0])
             first_value = data_columns_rows[0][0]
 
             if isinstance(first_value, int) or issubclass(
@@ -1273,7 +1324,12 @@ class Sparse_Data_Table:
             )
 
         self._calculate_formats()
+
         self._row_start_indices = numpy.array(data_columns_rows[2])
+
+        # In case people followed scipy csr format, we'll be nice
+        if len(self._row_start_indices) == num_rows + 1:
+            self._row_start_indices = self._row_start_indices[0:-1]
 
         row_start_indices_plus_one = \
             numpy.append(self._row_start_indices, self._num_entries)
@@ -1287,8 +1343,14 @@ class Sparse_Data_Table:
         self._row_data = numpy.array(data_columns_rows[0])
         self._row_column_indices = numpy.array(data_columns_rows[1])
 
-        scipy_sparse_csr = sparse.csr_matrix(data_columns_rows,
-                                             (num_rows, num_columns))
+        scipy_sparse_csr = sparse.csr_matrix(
+            (
+                self._row_data,
+                self._row_column_indices,
+                numpy.append(self._row_start_indices, self._num_entries)
+            ),
+            (num_rows, num_columns)
+        )
         scipy_sparse_csc = scipy_sparse_csr.tocsc(True)
 
         self._column_start_indices = numpy.array(scipy_sparse_csc.indptr)
@@ -1615,6 +1677,9 @@ class Sparse_Data_Table:
         metadata_lengths = []
 
         num_metadata_entries = struct.unpack("I", metadata_bytes[0:4])[0]
+
+        if num_metadata_entries == 0:
+            return
 
         byte_index = 4
 
