@@ -168,6 +168,26 @@ class Sparse_Data_Table:
         if self._data_buffer is not None:
             self._data_buffer.close()
 
+        if self._row_data is not None:
+            del self._row_data
+            del self._column_data
+
+        if self._row_start_indices is not None:
+            del self._row_start_indices
+            del self._row_column_indices
+            del self._row_lengths
+            del self._column_start_indices
+            del self._column_row_indices
+            del self._column_lengths
+
+        if self._metadata is not None:
+            del self._metadata
+
+        if self._row_name_index_map is not None:
+            del self._row_name_index_map
+        if self._column_name_index_map is not None:
+            del self._column_name_index_map
+
     def __setitem__(self, index, value):
         raise NotImplementedError("Sparse_Data_Table is read-only for now")
 
@@ -260,7 +280,10 @@ class Sparse_Data_Table:
         num_column_entries = sum([self._column_lengths[i]
                                   for i in column_indices])
 
-        if num_row_entries < num_column_entries:
+        # If there's no filtering of columns, or the number of entries in
+        # the columns exceeds the number in rows, we do row-based filtering
+        if num_row_entries < num_column_entries or \
+                num_columns == self._num_columns:
 
             # We're going to create a new SDT with only the requested rows,
             # but without filtering any columns (to avoid searching for the
@@ -699,45 +722,212 @@ class Sparse_Data_Table:
 
         return self._row_name_index_map[index]
 
-    def sum(self, axis=None):
-        """
-        Return the sum along a specific axis. If none is specified, the sum of
-        the whole table is returned.
-        :param axis: 0 for sum of each row, 1 for sum of each column, None for
-            sum of whole table
-        :return: The sum as specified by axis
-        """
+    def dimensionwise_function(self, function, axis=None):
 
         if axis is None:
-            return self._row_data.sum()
+            return function(self._row_data)
 
-        if axis == 0:
-            sums = numpy.zeros((self._num_rows, ))
+        if axis == 1:
+            results = numpy.zeros((self._num_rows, ))
 
             for row in range(self._num_rows - 1):
                 start_index = self._row_start_indices[row]
                 end_index = self._row_start_indices[row + 1]
 
-                sums[row] = self._row_data[start_index:end_index].sum()
+                results[row] = self._row_data[start_index:end_index].sum()
 
-            sums[-1] = self._row_data[self._row_start_indices[-1]:].sum()
+                num_default_entries = self._num_columns - \
+                                      (end_index - start_index)
 
-            return sums
+                results[row] += num_default_entries * self._default_value
 
-        elif axis == 1:
-            sums = numpy.zeros((self._num_columns, ))
+            results[-1] = function(self._row_data[self._row_start_indices[-1]:])
+
+            return results
+
+        elif axis == 0:
+            results = numpy.zeros((self._num_columns, ))
 
             for column in range(self._num_columns - 1):
                 start_index = self._column_start_indices[column]
                 end_index = self._column_start_indices[column + 1]
 
-                sums[column] = self._column_data[start_index:end_index].sum()
+                results[column] = self._column_data[start_index:end_index].sum()
 
-            sums[-1] = self._column_data[self._column_start_indices[-1]:].sum()
+                num_default_entries = self._num_rows - \
+                                      (end_index - start_index)
 
-            return sums
+                results[column] += num_default_entries * self._default_value
+
+            results[-1] = function(
+                self._column_data[self._column_start_indices[-1]:])
+
+            return results
         else:
             raise ValueError("Axis must be one of {0, 1, None}")
+
+    def sum(self, axis=None):
+        """
+        Return the sum along a specific axis. If none is specified, the sum of
+        the whole table is returned.
+        :param axis: 0 for sum of rows for each column, 1 for sum of columns for
+            each row. None for sum of whole table
+        :return: The sum as specified by axis
+        """
+
+        return self.dimensionwise_function(numpy.sum, axis=axis)
+
+    def max(self, axis=None):
+
+        return self.dimensionwise_function(numpy.max, axis=axis)
+
+    def min(self, axis=None):
+
+        return self.dimensionwise_function(numpy.min, axis=axis)
+
+    def mean(self, axis=None):
+
+        return self.dimensionwise_function(numpy.mean, axis=axis)
+
+    def elementwise_function(self, function, *args, in_place=True):
+
+        if not in_place:
+            raise NotImplementedError("Not in-place not implemented")
+
+        if len(args) > 0:
+
+            # Check if this is more than a single argument function
+            if hasattr(args[0], "__len__"):
+
+                all_matches = True
+                for i in range(len(args) - 1):
+                    if len(args[i]) != len(args[i + 1]):
+                        all_matches = False
+                        break
+
+                if not all_matches:
+                    raise ValueError("All args must be the same size")
+
+                for i in range(len(args[0])):
+                    transformed_value = function(self._default_value,
+                                                 *[args[j][i] for j in
+                                                   range(len(args))])
+                    if transformed_value != self._default_value:
+                        raise ValueError(
+                            "Function must be a no-op on default value!")
+
+                # This is a row-wise function.
+                if len(args[0]) == self._num_rows and \
+                        self._num_rows == self._num_columns:
+                    raise NotImplementedError("Haven't implemented row/col " +
+                                              "disambiguation")
+                if len(args[0]) == self._num_rows:
+                    for row in range(self._num_rows - 1):
+                        start_index = self._row_start_indices[row]
+                        end_index = self._row_start_indices[row + 1]
+
+                        self._row_data[start_index:end_index] = function(
+                            self._row_data[start_index:end_index],
+                            *[args[i][row] for i in range(len(args))])
+
+                    self._row_data[self._row_start_indices[-1]:] = function(
+                        self._row_data[self._row_start_indices[-1]:],
+                        *[args[i][-1] for i in range(len(args))])
+
+                    # Convert it over to column data
+                    scipy_sparse_csr = sparse.csr_matrix(
+                        (
+                            self._row_data,
+                            self._row_column_indices,
+                            numpy.append(self._row_start_indices,
+                                         self._num_entries)
+                        ),
+                        (self._num_rows, self._num_columns)
+                    )
+
+                    scipy_sparse_csc = scipy_sparse_csr.tocsc(True)
+
+                    self._column_start_indices = numpy.array(
+                        scipy_sparse_csc.indptr)
+
+                    column_start_indices_plus_one = \
+                        numpy.append(self._column_start_indices,
+                                     self._num_entries)
+
+                    column_start_indices_plus_one = \
+                        column_start_indices_plus_one[1:]
+
+                    self._column_lengths = numpy.subtract(
+                        column_start_indices_plus_one,
+                        self._column_start_indices
+                    )
+
+                    self._column_data = numpy.array(scipy_sparse_csc.data)
+                    self._column_row_indices = numpy.array(
+                        scipy_sparse_csc.indices)
+
+                elif len(args[0]) == self._num_columns:
+                    for column in range(self._num_columns - 1):
+                        start_index = self._column_start_indices[column]
+                        end_index = self._column_start_indices[column + 1]
+
+                        self._column_data[start_index:end_index] = function(
+                            self._column_data[start_index:end_index],
+                            *[args[i][column] for i in range(len(args))])
+
+                    self._column_data[self._column_start_indices[-1]:] = \
+                        function(
+                            self._column_data[self._column_start_indices[-1]:],
+                            *[args[i][-1] for i in range(len(args))])
+
+                    # Convert it over to row data
+                    scipy_sparse_csc = sparse.csc_matrix(
+                        (
+                            self._column_data,
+                            self._column_row_indices,
+                            numpy.append(self._column_start_indices,
+                                         self._num_entries)
+                        ),
+                        (self._num_rows, self._num_columns)
+                    )
+
+                    scipy_sparse_csr = scipy_sparse_csc.tocsr(True)
+
+                    self._row_start_indices = numpy.array(
+                        scipy_sparse_csr.indptr)
+
+                    row_start_indices_plus_one = \
+                        numpy.append(self._row_start_indices, self._num_entries)
+
+                    row_start_indices_plus_one = row_start_indices_plus_one[1:]
+                    self._row_lengths = numpy.subtract(
+                        row_start_indices_plus_one,
+                        self._row_start_indices
+                    )
+
+                    self._row_data = numpy.array(scipy_sparse_csr.data)
+                    self._row_column_indices = numpy.array(
+                        scipy_sparse_csr.indices)
+                else:
+                    raise ValueError("Arguments must be of len num rows or " +
+                                     "columns")
+            else:
+
+                self._default_value = function(self._default_value, *args)
+
+                try:
+                    self._row_data = function(self._row_data, *args)
+                    self._column_data = function(self._column_data, *args)
+                except:
+                    for element_index in range(len(self._row_data)):
+                        self._row_data[element_index] = \
+                            function(self._row_data[element_index], *args)
+                        self._column_data[element_index] = \
+                            function(self._column_data[element_index], *args)
+        else:
+            self._default_value = function(self._default_value)
+            self._row_data = function(self._row_data)
+            self._column_data = function(self._column_data)
 
     def get_column_index(self, index):
 
@@ -876,6 +1066,106 @@ class Sparse_Data_Table:
         if row_name is not None:
             self._metadata[Metadata_Type.ROW_NAMES].append(row_name)
             self._row_name_index_map[row_name] = new_row_index
+
+    def divide(self, divisor, integer_division=False):
+
+        if not integer_division:
+            if self._data_type != Data_Type.FLOAT:
+                self.convert_to_float()
+
+        self.elementwise_function(numpy.divide, divisor)
+
+    def multiply(self, multiplier):
+
+        self.elementwise_function(numpy.multiply, multiplier)
+
+    def add(self, addend):
+
+        self.elementwise_function(numpy.add, addend)
+
+    def subtract(self, subtrahend):
+
+        self.elementwise_function(numpy.subtract, subtrahend)
+
+    def log(self):
+
+        self.elementwise_function(numpy.log)
+
+    def log2(self):
+
+        self.elementwise_function(numpy.log2)
+
+    def log10(self):
+
+        self.elementwise_function(numpy.log10)
+
+    def transpose(self):
+
+        row_data = self._row_data
+        self._row_data = self._column_data
+        self._column_data = row_data
+
+        num_rows = self._num_rows
+        self._num_rows = self._num_columns
+        self._num_columns = num_rows
+
+        row_column_indices = self._row_column_indices
+        self._row_column_indices = self._column_row_indices
+        self._column_row_indices = row_column_indices
+
+        row_start_indices = self._row_start_indices
+        self._row_start_indices = self._column_start_indices
+        self._column_start_indices = row_start_indices
+
+        row_lengths = self._row_lengths
+        self._row_lengths = self._column_lengths
+        self._column_lengths = row_lengths
+
+        row_name_index_map = self._row_name_index_map
+        self._row_name_index_map = self._column_name_index_map
+        self._column_name_index_map = row_name_index_map
+
+        if Metadata_Type.ROW_NAMES in self._metadata:
+            row_names = self._metadata[Metadata_Type.ROW_NAMES]
+            if Metadata_Type.COLUMN_NAMES in self._metadata:
+                self._metadata[Metadata_Type.ROW_NAMES] = \
+                    self._metadata[Metadata_Type.COLUMN_NAMES]
+            else:
+                del self._metadata[Metadata_Type.ROW_NAMES]
+            self._metadata[Metadata_Type.COLUMN_NAMES] = row_names
+        else:
+            if Metadata_Type.COLUMN_NAMES in self._metadata:
+                self._metadata[Metadata_Type.ROW_NAMES] = \
+                    self._metadata[Metadata_Type.COLUMN_NAMES]
+                del self._metadata[Metadata_Type.COLUMN_NAMES]
+
+        num_bytes_column_index = self._num_bytes_column_index
+        self._num_bytes_row_index = self._num_bytes_column_index
+        self._num_bytes_column_index = num_bytes_column_index
+
+        num_bytes_row_byte = self._num_bytes_row_byte
+        self._num_bytes_row_byte = self._num_bytes_column_byte
+        self._num_bytes_column_byte = num_bytes_row_byte
+
+        num_bytes_row_entry = self._num_bytes_row_entry
+        self._num_bytes_row_entry = self._num_bytes_column_entry
+        self._num_bytes_column_entry = num_bytes_row_entry
+
+        max_row_byte = self._max_row_byte
+        self._max_row_byte = self._max_column_byte
+        self._max_column_byte = max_row_byte
+
+        pack_format_row_byte = self._pack_format_row_byte
+        self._pack_format_row_byte = self._pack_format_column_byte
+        self._pack_format_column_byte = pack_format_row_byte
+
+        pack_format_row_index = self._pack_format_row_index
+        self._pack_format_row_index = self._pack_format_column_index
+        self._pack_format_column_index = pack_format_row_index
+
+        row_data_start_byte = self._row_data_start_byte
+        self._row_data_start_byte = self._column_data_start_byte
+        self._column_data_start_byte = row_data_start_byte
 
     def add_column(self, index_values, column_name=None):
         """
@@ -1247,6 +1537,27 @@ class Sparse_Data_Table:
 
         self._default_value = default_value
 
+    def convert_to_float(self):
+
+        self._data_type = Data_Type.FLOAT
+
+        self._data_size = Sparse_Data_Table.get_num_bytes(
+            self._data_type, numpy.max(self._row_data),
+            min_value=numpy.min(self._row_data)
+        )
+
+        self._calculate_formats()
+
+        self._row_data = numpy.array(
+            self._row_data,
+            self._pack_format_data
+        )
+
+        self._column_data = numpy.array(
+            self._column_data,
+            self._pack_format_data
+        )
+
     def from_sparse_column_entries(
             self,
             data_rows_columns,
@@ -1310,7 +1621,7 @@ class Sparse_Data_Table:
 
         scipy_sparse_csr = scipy_sparse_csc.tocsr(True)
 
-        self._row_start_indices = numpy.array(scipy_sparse_csr.indptr)
+        self._row_start_indices = numpy.array(scipy_sparse_csr.indptr)[0:-1]
 
         row_start_indices_plus_one = \
             numpy.append(self._row_start_indices, self._num_entries)
@@ -1387,7 +1698,7 @@ class Sparse_Data_Table:
         )
         scipy_sparse_csc = scipy_sparse_csr.tocsc(True)
 
-        self._column_start_indices = numpy.array(scipy_sparse_csc.indptr)
+        self._column_start_indices = numpy.array(scipy_sparse_csc.indptr)[0:-1]
 
         column_start_indices_plus_one = \
             numpy.append(self._column_start_indices, self._num_entries)
