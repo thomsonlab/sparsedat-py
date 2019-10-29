@@ -6,6 +6,7 @@ import io
 from scipy import sparse
 from enum import Enum
 import pandas
+from copy import copy
 
 from .Data_Type import Data_Type
 from .Metadata_Type import Metadata_Type
@@ -162,6 +163,56 @@ class Sparse_Data_Table:
         if not self._load_on_demand:
             self.load_all_metadata()
             self.load_all_data()
+
+    def __copy__(self):
+
+        new_SDT = Sparse_Data_Table()
+
+        if self._is_data_on_buffer:
+            raise NotImplementedError("Can't copy SDT on buffer")
+
+        # Any metadata associated with the file
+        new_SDT._metadata = copy(self._metadata)
+
+        # The data needed to traverse and query the SDT
+        new_SDT._num_rows = self._num_rows
+        new_SDT._num_columns = self._num_columns
+        new_SDT._num_entries = self._num_entries
+        new_SDT._row_start_indices = copy(self._row_start_indices)
+        new_SDT._row_column_indices = copy(self._row_column_indices)
+        new_SDT._row_lengths = copy(self._row_lengths)
+        new_SDT._column_start_indices = copy(self._column_start_indices)
+        new_SDT._column_row_indices = copy(self._column_row_indices)
+        new_SDT._column_lengths = copy(self._column_lengths)
+        new_SDT._default_value = copy(self._default_value)
+        new_SDT._row_data = copy(self._row_data)
+        new_SDT._column_data = copy(self._column_data)
+
+        new_SDT._row_name_index_map = copy(self._row_name_index_map)
+        new_SDT._column_name_index_map = copy(self._column_name_index_map)
+
+        # Information about how to store data when writing it out
+        new_SDT._data_type = self._data_type
+        new_SDT._data_size = self._data_size
+        new_SDT._num_bytes_row_index = self._num_bytes_row_index
+        new_SDT._num_bytes_column_index = self._num_bytes_column_index
+        new_SDT._num_bytes_row_byte = self._num_bytes_row_byte
+        new_SDT._num_bytes_column_byte = self._num_bytes_column_byte
+        new_SDT._num_bytes_row_entry = self._num_bytes_row_entry
+        new_SDT._num_bytes_column_entry = self._num_bytes_column_entry
+        new_SDT._max_row_byte = self._max_row_byte
+        new_SDT._max_column_byte = self._max_column_byte
+        new_SDT._pack_format_row_byte = self._pack_format_row_byte
+        new_SDT._pack_format_column_byte = self._pack_format_column_byte
+        new_SDT._pack_format_row_index = self._pack_format_row_index
+        new_SDT._pack_format_column_index = self._pack_format_column_index
+        new_SDT._pack_format_data = self._pack_format_data
+
+        new_SDT._metadata_size = self._metadata_size
+        new_SDT._row_data_start_byte = self._row_data_start_byte
+        new_SDT._column_data_start_byte = self._column_data_start_byte
+
+        return new_SDT
 
     def __del__(self):
 
@@ -323,8 +374,6 @@ class Sparse_Data_Table:
 
                 entry_index += row_length
 
-            row_start_indices = numpy.append(row_start_indices, num_row_entries)
-
             new_SDT.from_sparse_row_entries(
                 (row_data, row_column_indices, row_start_indices),
                 num_rows,
@@ -391,9 +440,6 @@ class Sparse_Data_Table:
                         column_start_index:column_start_index+column_length]
 
                 entry_index += column_length
-
-            column_start_indices = numpy.append(
-                column_start_indices, num_column_entries)
 
             new_SDT.from_sparse_column_entries(
                 (column_data, column_row_indices, column_start_indices),
@@ -734,7 +780,9 @@ class Sparse_Data_Table:
                 start_index = self._row_start_indices[row]
                 end_index = self._row_start_indices[row + 1]
 
-                results[row] = self._row_data[start_index:end_index].sum()
+                results[row] = function(
+                    self._row_data[start_index:end_index]
+                )
 
                 num_default_entries = self._num_columns - \
                                       (end_index - start_index)
@@ -752,7 +800,8 @@ class Sparse_Data_Table:
                 start_index = self._column_start_indices[column]
                 end_index = self._column_start_indices[column + 1]
 
-                results[column] = self._column_data[start_index:end_index].sum()
+                results[column] = function(
+                    self._column_data[start_index:end_index])
 
                 num_default_entries = self._num_rows - \
                                       (end_index - start_index)
@@ -788,6 +837,14 @@ class Sparse_Data_Table:
     def mean(self, axis=None):
 
         return self.dimensionwise_function(numpy.mean, axis=axis)
+
+    def median(self, axis=None):
+
+        return self.dimensionwise_function(numpy.median, axis=axis)
+
+    def std(self, axis=None):
+
+        return self.dimensionwise_function(numpy.std, axis=axis)
 
     def elementwise_function(self, function, *args, in_place=True):
 
@@ -848,7 +905,7 @@ class Sparse_Data_Table:
                     scipy_sparse_csc = scipy_sparse_csr.tocsc(True)
 
                     self._column_start_indices = numpy.array(
-                        scipy_sparse_csc.indptr)
+                        scipy_sparse_csc.indptr)[0:-1]
 
                     column_start_indices_plus_one = \
                         numpy.append(self._column_start_indices,
@@ -894,7 +951,7 @@ class Sparse_Data_Table:
                     scipy_sparse_csr = scipy_sparse_csc.tocsr(True)
 
                     self._row_start_indices = numpy.array(
-                        scipy_sparse_csr.indptr)
+                        scipy_sparse_csr.indptr)[0:-1]
 
                     row_start_indices_plus_one = \
                         numpy.append(self._row_start_indices, self._num_entries)
@@ -1098,6 +1155,10 @@ class Sparse_Data_Table:
     def log10(self):
 
         self.elementwise_function(numpy.log10)
+
+    def sqrt(self):
+
+        self.elementwise_function(numpy.sqrt)
 
     def transpose(self):
 
@@ -1807,6 +1868,14 @@ class Sparse_Data_Table:
         return self._row_data
 
     @property
+    def column_data(self):
+
+        if self._is_data_on_buffer:
+            self.load_all_data()
+
+        return self._column_data
+
+    @property
     def row_column_indices(self):
 
         if self._is_data_on_buffer:
@@ -1815,8 +1884,28 @@ class Sparse_Data_Table:
         return self._row_column_indices
 
     @property
+    def column_row_indices(self):
+
+        if self._is_data_on_buffer:
+            self.load_all_data()
+
+        return self._column_row_indices
+
+    @property
     def row_start_indices(self):
         return self._row_start_indices
+
+    @property
+    def column_start_indices(self):
+        return self._column_start_indices
+
+    @property
+    def row_lengths(self):
+        return self._row_lengths
+
+    @property
+    def column_lengths(self):
+        return self._column_lengths
 
     def _calculate_formats(self):
 

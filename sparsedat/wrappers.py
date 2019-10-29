@@ -52,6 +52,43 @@ def load_mtx(row_names_file_path, column_names_file_path, matrix_file_path):
     return sdt
 
 
+def to_mtx(sdt, row_names_file_path, column_names_file_path, matrix_file_path):
+
+    with open(row_names_file_path, "w") as row_names_file:
+        for row_name in sdt.row_names[::-1]:
+            row_names_file.write("%s\t%s\t%s\n" %
+                                 (row_name, row_name, row_name))
+
+    with open(column_names_file_path, "w") as column_names_file:
+        for column_name in sdt.column_names:
+            column_names_file.write("%s\n" % column_name)
+
+    with open(matrix_file_path, "w") as matrix_file:
+
+        matrix_file.write(
+            "%%MatrixMarket matrix coordinate integer general\n")
+        matrix_file.write(
+            "%metadata_json: {\"format_version\": 2, "
+            "\"software_version\": \"3.0.0\"}\n")
+
+        matrix_file.write("%i %i %i\n" %
+                          (sdt.num_rows, sdt.num_columns, sdt.num_entries))
+
+        column_index = 0
+
+        for entry_index in range(sdt.num_entries):
+
+            while entry_index >= sdt.column_start_indices[column_index] + \
+                    sdt.column_lengths[column_index]:
+                column_index += 1
+
+            matrix_file.write("%i %i %i\n" % (
+                sdt.num_rows - sdt.column_row_indices[entry_index],
+                column_index + 1,
+                sdt.column_data[entry_index]
+            ))
+
+
 def to_numpy(sdt):
 
     numpy_array = numpy.full(sdt.shape, fill_value=sdt.default_value)
