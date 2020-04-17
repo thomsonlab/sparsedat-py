@@ -4,17 +4,19 @@ from scipy import sparse
 from .Sparse_Data_Table import Sparse_Data_Table
 
 
-def load_mtx(row_names_file_path, column_names_file_path, matrix_file_path):
+def load_mtx(
+        mtx_file_path,
+        row_names_file_path=None,
+        column_names_file_path=None
+):
+
+    if row_names_file_path is not None or column_names_file_path is not None:
+        raise DeprecationWarning("Row and column names no longer part of MTX \
+                                 loading -  set row and column names manually")
 
     sdt = Sparse_Data_Table()
 
-    with open(row_names_file_path, "r") as row_names_file:
-        row_names = [line[:-1] for line in row_names_file]
-
-    with open(column_names_file_path, "r") as column_names_file:
-        column_names = [line[:-1] for line in column_names_file]
-
-    with open(matrix_file_path, "r") as matrix_file:
+    with open(mtx_file_path, "r") as matrix_file:
 
         row_column_values = []
 
@@ -45,9 +47,6 @@ def load_mtx(row_names_file_path, column_names_file_path, matrix_file_path):
             row_column_values.append((row_index, column_index, data_value))
 
     sdt.from_row_column_values(row_column_values, num_rows, num_columns)
-
-    sdt.column_names = column_names
-    sdt.row_names = row_names
 
     return sdt
 

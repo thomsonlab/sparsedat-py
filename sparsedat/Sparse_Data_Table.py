@@ -136,6 +136,7 @@ class Sparse_Data_Table:
         self._num_bytes_column_byte = None
         self._num_bytes_row_entry = None
         self._num_bytes_column_entry = None
+        self._num_bytes_entry_index = None
         self._max_row_byte = None
         self._max_column_byte = None
         self._pack_format_row_byte = None
@@ -143,6 +144,7 @@ class Sparse_Data_Table:
         self._pack_format_row_index = None
         self._pack_format_column_index = None
         self._pack_format_data = None
+        self._pack_format_entry_index = None
 
         # Data relevant for real time file I/O
         self._is_data_on_buffer = False
@@ -200,6 +202,7 @@ class Sparse_Data_Table:
         new_SDT._num_bytes_column_byte = self._num_bytes_column_byte
         new_SDT._num_bytes_row_entry = self._num_bytes_row_entry
         new_SDT._num_bytes_column_entry = self._num_bytes_column_entry
+        new_SDT._num_bytes_entry_index = self._num_bytes_entry_index
         new_SDT._max_row_byte = self._max_row_byte
         new_SDT._max_column_byte = self._max_column_byte
         new_SDT._pack_format_row_byte = self._pack_format_row_byte
@@ -207,6 +210,7 @@ class Sparse_Data_Table:
         new_SDT._pack_format_row_index = self._pack_format_row_index
         new_SDT._pack_format_column_index = self._pack_format_column_index
         new_SDT._pack_format_data = self._pack_format_data
+        new_SDT._pack_format_entry_index = self._pack_format_entry_index
 
         new_SDT._metadata_size = self._metadata_size
         new_SDT._row_data_start_byte = self._row_data_start_byte
@@ -350,7 +354,7 @@ class Sparse_Data_Table:
             )
             row_start_indices = numpy.ndarray(
                 (num_rows,),
-                dtype=self._pack_format_row_byte
+                dtype=self._pack_format_entry_index
             )
 
             entry_index = 0
@@ -416,7 +420,7 @@ class Sparse_Data_Table:
             )
             column_start_indices = numpy.ndarray(
                 (num_columns,),
-                dtype=self._pack_format_column_byte
+                dtype=self._pack_format_entry_index
             )
 
             entry_index = 0
@@ -824,27 +828,223 @@ class Sparse_Data_Table:
         :return: The sum as specified by axis
         """
 
-        return self.dimensionwise_function(numpy.sum, axis=axis)
+        if axis is None:
+            return self._row_data.sum()
+
+        if axis == 1:
+            results = numpy.zeros((self._num_rows,))
+
+            for row in range(self._num_rows - 1):
+                start_index = self._row_start_indices[row]
+                end_index = self._row_start_indices[row + 1]
+
+                num_default_entries = self._num_columns - \
+                                      (end_index - start_index)
+
+                results[row] = num_default_entries * self._default_value
+
+                if end_index != start_index:
+                    results[row] += self._row_data[start_index:end_index].sum()
+
+            num_default_entries = \
+                self._num_columns - self._row_start_indices[-1]
+
+            results[-1] = num_default_entries * self._default_value
+
+            if self._row_start_indices[-1] < len(self._row_data):
+                results[-1] += \
+                    self._row_data[self._row_start_indices[-1]:].sum()
+
+            return results
+
+        elif axis == 0:
+
+            results = numpy.zeros((self._num_columns,))
+
+            for column in range(self._num_columns - 1):
+
+                start_index = self._column_start_indices[column]
+                end_index = self._column_start_indices[column + 1]
+
+                num_default_entries = \
+                    self._num_rows - (end_index - start_index)
+
+                results[column] = num_default_entries * self._default_value
+
+                if end_index != start_index:
+                    results[column] += \
+                        self._column_data[start_index:end_index].sum()
+
+            num_default_entries = \
+                self._num_rows - self._column_start_indices[-1]
+
+            results[-1] = num_default_entries * self._default_value
+
+            if self._column_start_indices[-1] < len(self._column_data):
+                results[-1] += \
+                    self._column_data[self._column_start_indices[-1]:].sum()
+
+            return results
+
+    def dimensionwise_function_default_empty(self, function, axis=None):
+
+        if axis is None:
+            return function(self._row_data)
+
+        if axis == 1:
+            results = numpy.zeros((self._num_rows,),
+                                  dtype=self._pack_format_data)
+
+            for row in range(self._num_rows - 1):
+
+                start_index = self._row_start_indices[row]
+                end_index = self._row_start_indices[row + 1]
+
+                num_entries = end_index - start_index
+
+                if num_entries == 0:
+                    results[row] = self._default_value
+                else:
+                    results[row] = \
+                        function(self._row_data[start_index:end_index])
+
+            start_index = self._row_start_indices[-1]
+            end_index = len(self._row_data) - 1
+
+            num_entries = end_index - start_index
+
+            if num_entries == 0:
+                results[-1] = self._default_value
+            else:
+                results[-1] = function(self._row_data[start_index:])
+
+            return results
+
+        elif axis == 0:
+            results = numpy.zeros((self._num_columns,),
+                                  dtype=self._pack_format_data)
+
+            for column in range(self._num_columns - 1):
+
+                start_index = self._column_start_indices[column]
+                end_index = self._column_start_indices[column + 1]
+
+                num_entries = end_index - start_index
+
+                if num_entries == 0:
+                    results[column] = self._default_value
+                else:
+                    results[column] = \
+                        function(self._column_data[start_index:end_index])
+
+            start_index = self._column_start_indices[-1]
+            end_index = len(self._column_data) - 1
+
+            num_entries = end_index - start_index
+
+            if num_entries == 0:
+                results[-1] = self._default_value
+            else:
+                results[-1] = function(self._column_data[start_index:])
+
+            return results
+        else:
+            raise ValueError("Axis must be one of {0, 1, None}")
 
     def max(self, axis=None):
 
-        return self.dimensionwise_function(numpy.max, axis=axis)
+        return self.dimensionwise_function_default_empty(numpy.max, axis=axis)
 
     def min(self, axis=None):
 
-        return self.dimensionwise_function(numpy.min, axis=axis)
+        return self.dimensionwise_function_default_empty(numpy.min, axis=axis)
 
     def mean(self, axis=None):
 
-        return self.dimensionwise_function(numpy.mean, axis=axis)
+        if axis is None:
+            value_sum = self._row_data.sum()
+            num_default_values = self.shape[0]*self.shape[1] - self.num_entries
+            value_sum += num_default_values * self._default_value
+            return value_sum / self.num_entries
+
+        if axis == 1:
+
+            results = numpy.zeros((self._num_rows,))
+
+            for row in range(self._num_rows - 1):
+
+                start_index = self._row_start_indices[row]
+                end_index = self._row_start_indices[row + 1]
+
+                num_entries = end_index - start_index
+
+                if num_entries == 0:
+                    results[row] = self._default_value
+                else:
+                    results[row] = self._row_data[start_index:end_index].sum()
+                    num_default_entries = self.shape[1] - num_entries
+                    results[row] += num_default_entries * self._default_value
+                    results[row] /= self.shape[1]
+
+            start_index = self._row_start_indices[-1]
+            end_index = len(self._row_data) - 1
+
+            num_entries = end_index - start_index
+
+            if num_entries == 0:
+                results[-1] = self._default_value
+            else:
+                results[-1] = self._row_data[start_index:].sum()
+                num_default_entries = self.shape[1] - num_entries
+                results[-1] += num_default_entries * self._default_value
+                results[-1] /= self.shape[1]
+
+            return results
+
+        elif axis == 0:
+            results = numpy.zeros((self._num_columns,))
+
+            for column in range(self._num_columns - 1):
+
+                start_index = self._column_start_indices[column]
+                end_index = self._column_start_indices[column + 1]
+
+                num_entries = end_index - start_index
+
+                if num_entries == 0:
+                    results[column] = self._default_value
+                else:
+                    results[column] = \
+                        self._column_data[start_index:end_index].sum()
+                    num_default_entries = self.shape[0] - num_entries
+                    results[column] += num_default_entries * self._default_value
+                    results[column] /= self.shape[0]
+
+            start_index = self._column_start_indices[-1]
+            end_index = len(self._column_data) - 1
+
+            num_entries = end_index - start_index
+
+            if num_entries == 0:
+                results[-1] = self._default_value
+            else:
+                results[-1] = \
+                    self._column_data[start_index:].sum()
+                num_default_entries = self.shape[0] - num_entries
+                results[-1] += num_default_entries * self._default_value
+                results[-1] /= self.shape[0]
+
+            return results
+        else:
+            raise ValueError("Axis must be one of {0, 1, None}")
 
     def median(self, axis=None):
 
-        return self.dimensionwise_function(numpy.median, axis=axis)
+        raise NotImplementedError()
 
     def std(self, axis=None):
 
-        return self.dimensionwise_function(numpy.std, axis=axis)
+        raise NotImplementedError()
 
     def elementwise_function(self, function, *args, in_place=True):
 
@@ -1273,6 +1473,8 @@ class Sparse_Data_Table:
             sorted_row_indices]
         column_data_to_add = numpy.array(column_data_to_add)[sorted_row_indices]
 
+        self._num_entries += len(column_data_to_add)
+
         self._column_start_indices = numpy.append(
             self._column_start_indices, len(self._column_data))
         self._column_lengths = numpy.append(
@@ -1565,7 +1767,7 @@ class Sparse_Data_Table:
         self._calculate_formats()
 
         self._row_start_indices = numpy.array(
-            row_start_indices, dtype=self._pack_format_row_index
+            row_start_indices, dtype=self._pack_format_entry_index
         )
 
         self._row_lengths = numpy.array(
@@ -1581,7 +1783,7 @@ class Sparse_Data_Table:
         )
 
         self._column_start_indices = numpy.array(
-            column_start_indices, dtype=self._pack_format_column_index
+            column_start_indices, dtype=self._pack_format_entry_index
         )
 
         self._column_lengths = numpy.array(
@@ -1913,6 +2115,8 @@ class Sparse_Data_Table:
             Data_Type.UINT, self._num_rows)
         self._num_bytes_column_index = self.get_num_bytes(
             Data_Type.UINT, self._num_columns)
+        self._num_bytes_entry_index = self.get_num_bytes(
+            Data_Type.UINT, self._num_entries)
 
         self._num_bytes_row_entry = \
             self._num_bytes_column_index + self._data_size
@@ -1938,6 +2142,9 @@ class Sparse_Data_Table:
             Data_Type.UINT, self._num_bytes_row_index)
         self._pack_format_column_index = Sparse_Data_Table.get_pack_format(
             Data_Type.UINT, self._num_bytes_column_index)
+
+        self._pack_format_entry_index = Sparse_Data_Table.get_pack_format(
+            Data_Type.UINT, self._num_bytes_entry_index)
 
         self._pack_format_data = Sparse_Data_Table.get_pack_format(
             self._data_type, self._data_size)
@@ -2258,6 +2465,9 @@ class Sparse_Data_Table:
             self._row_start_indices,
             self._num_bytes_column_index + self._data_size)
 
+        self._row_start_indices = self._row_start_indices.astype(
+            self._pack_format_entry_index, copy=False)
+
         row_start_indices_plus_one = \
             numpy.append(self._row_start_indices, self._num_entries)
 
@@ -2278,6 +2488,9 @@ class Sparse_Data_Table:
         self._column_start_indices = numpy.floor_divide(
             self._column_start_indices,
             self._num_bytes_row_index + self._data_size)
+
+        self._column_start_indices = self._column_start_indices.astype(
+            self._pack_format_entry_index, copy=False)
 
         column_start_indices_plus_one = \
             numpy.append(self._column_start_indices, self._num_entries)
