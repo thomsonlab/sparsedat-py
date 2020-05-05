@@ -938,7 +938,7 @@ class Sparse_Data_Table:
                         function(self._column_data[start_index:end_index])
 
             start_index = self._column_start_indices[-1]
-            end_index = len(self._column_data) - 1
+            end_index = len(self._column_data)
 
             num_entries = end_index - start_index
 
@@ -1317,6 +1317,12 @@ class Sparse_Data_Table:
             previous_entry_index = entry_index
             num_entries_added += 1
 
+        # Copy over the remaining data
+        new_column_data[previous_entry_index + num_entries_added:] = \
+            self._column_data[previous_entry_index:]
+        new_column_row_indices[previous_entry_index + num_entries_added:] = \
+            self._column_row_indices[previous_entry_index:]
+
         self._column_data = new_column_data
         self._column_row_indices = new_column_row_indices
 
@@ -1550,6 +1556,12 @@ class Sparse_Data_Table:
             previous_row_index = row_index
             previous_entry_index = entry_index
             num_entries_added += 1
+
+        # Copy over the remaining data
+        new_row_data[previous_entry_index + num_entries_added:] = \
+            self._row_data[previous_entry_index:]
+        new_row_column_indices[previous_entry_index + num_entries_added:] = \
+            self._row_column_indices[previous_entry_index:]
 
         self._row_data = new_row_data
         self._row_column_indices = new_row_column_indices

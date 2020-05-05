@@ -55,8 +55,7 @@ def to_mtx(sdt, row_names_file_path, column_names_file_path, matrix_file_path):
 
     with open(row_names_file_path, "w") as row_names_file:
         for row_name in sdt.row_names[::-1]:
-            row_names_file.write("%s\t%s\t%s\n" %
-                                 (row_name, row_name, row_name))
+            row_names_file.write("%s\n" % row_name)
 
     with open(column_names_file_path, "w") as column_names_file:
         for column_name in sdt.column_names:
