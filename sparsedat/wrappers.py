@@ -2,6 +2,80 @@ import numpy
 from scipy import sparse
 
 from .Sparse_Data_Table import Sparse_Data_Table
+from . import Data_Type
+
+def load_text(
+    text_file_path,
+    separator="\t",
+    has_header=False,
+    has_column_names=False,
+    default_value=0,
+    data_type=Data_Type.FLOAT
+):
+    column_names = None
+    row_names = None
+    num_rows = 0
+    num_columns = 0
+    row_column_values = []
+
+    with open(text_file_path, "r") as text_file:
+
+        if has_header:
+
+            header_row = text_file.readline()
+
+            header_row_elements = header_row.split(separator)
+
+            if has_column_names:
+                header_row_elements = header_row_elements[1:]
+
+            column_names = [column_name.strip() for column_name in header_row_elements]
+            num_columns = len(column_names)
+
+        row = text_file.readline()
+        row_index = 0
+
+        while row:
+
+            row_elements = row.split(separator)
+
+            if has_column_names:
+                column_name = row_elements[0].strip()
+                row_elements = [row_element.strip() for row_element in row_elements[1:]]
+            else:
+                row_elements = [row_element.strip() for row_element in row_elements]
+            
+            if data_type == Data_Type.FLOAT:
+                row_values = [float(element) for element in row_elements]
+            elif data_type == Data_Type.INT or data_type == Data_Type.UINT:
+                row_values = [int(element) for element in row_elements]
+            else:
+                raise ValueError("Data type must be one of the values in sparsedat.Data_Type")
+            
+            for column_index, value in enumerate(row_values):
+                if value != default_value:
+                    row_column_values.append((row_index, column_index, value))
+                
+                num_columns = max(num_columns, column_index + 1)
+            
+            row = text_file.readline()
+            row_index += 1
+        
+    sparsedat = Sparse_Data_Table()
+
+    sparsedat.from_row_column_values(
+        row_column_values,
+        num_rows=row_index,
+        num_columns=num_columns,
+        default_value=default_value
+    )
+
+    if row_names is not None:
+        sparsedat.row_names = row_names
+    if column_names is not None:
+        sparsedat.column_names = column_names
+    
+    return sparsedat
 
 
 def load_mtx(
