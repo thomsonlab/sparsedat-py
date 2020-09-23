@@ -8,13 +8,15 @@ def load_text(
     text_file_path,
     separator="\t",
     has_header=False,
-    has_column_names=False,
+    has_row_names=False,
     default_value=0,
     data_type=Data_Type.FLOAT
 ):
     column_names = None
-    row_names = None
-    num_rows = 0
+    if has_row_names:
+        row_names = []
+    else:
+        row_names = None
     num_columns = 0
     row_column_values = []
 
@@ -26,7 +28,7 @@ def load_text(
 
             header_row_elements = header_row.split(separator)
 
-            if has_column_names:
+            if has_row_names:
                 header_row_elements = header_row_elements[1:]
 
             column_names = [column_name.strip() for column_name in header_row_elements]
@@ -39,8 +41,9 @@ def load_text(
 
             row_elements = row.split(separator)
 
-            if has_column_names:
-                column_name = row_elements[0].strip()
+            if has_row_names:
+                row_name = row_elements[0].strip()
+                row_names.append(row_name)
                 row_elements = [row_element.strip() for row_element in row_elements[1:]]
             else:
                 row_elements = [row_element.strip() for row_element in row_elements]
