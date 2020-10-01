@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name="sparsedat",
-    version="1.0.0a11",
+    version="1.0.0a12",
     packages=[
         "sparsedat"
     ],
