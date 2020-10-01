@@ -128,7 +128,7 @@ def load_mtx(
     return sdt
 
 
-def to_mtx(sdt, row_names_file_path, column_names_file_path, matrix_file_path):
+def to_mtx(sdt, row_names_file_path, column_names_file_path, matrix_file_path, column_based=True):
 
     with open(row_names_file_path, "w") as row_names_file:
         for row_name in sdt.row_names[::-1]:
@@ -149,19 +149,34 @@ def to_mtx(sdt, row_names_file_path, column_names_file_path, matrix_file_path):
         matrix_file.write("%i %i %i\n" %
                           (sdt.num_rows, sdt.num_columns, sdt.num_entries))
 
-        column_index = 0
+        if column_based:
+            column_index = 0
 
-        for entry_index in range(sdt.num_entries):
+            for entry_index in range(sdt.num_entries):
 
-            while entry_index >= sdt.column_start_indices[column_index] + \
-                    sdt.column_lengths[column_index]:
-                column_index += 1
+                while entry_index >= sdt.column_start_indices[column_index] + \
+                        sdt.column_lengths[column_index]:
+                    column_index += 1
 
-            matrix_file.write("%i %i %i\n" % (
-                sdt.num_rows - sdt.column_row_indices[entry_index],
-                column_index + 1,
-                sdt.column_data[entry_index]
-            ))
+                matrix_file.write("%i %i %i\n" % (
+                    sdt.num_rows - sdt.column_row_indices[entry_index],
+                    column_index + 1,
+                    sdt.column_data[entry_index]
+                ))
+        else:
+            row_index = 0
+
+            for entry_index in range(sdt.num_entries):
+
+                while entry_index >= sdt.row_start_indices[row_index] + \
+                        sdt.row_lengths[row_index]:
+                    row_index += 1
+
+                matrix_file.write("%i %i %i\n" % (
+                    row_index + 1,
+                    sdt.row_column_indices[entry_index] + 1,
+                    sdt.row_data[entry_index]
+                ))
 
 
 def to_numpy(sdt):
